@@ -1,4 +1,3 @@
-// src/js/ui/dragdrop.js
 /**
  * oja/dragdrop.js
  * Drag and drop utilities — reorder lists, file drop zones, and draggable elements.

@@ -1,4 +1,3 @@
-// src/js/core/animate.js
 /**
  * oja/animate.js
  * Animation utilities for DOM elements.
