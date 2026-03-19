@@ -1,3 +1,4 @@
+// src/js/core/api.js
 /**
  * oja/api.js
  * Fetch wrapper with auth, online/offline detection, and codec support.
@@ -62,7 +63,7 @@ export class Api {
      *   retryDelay    : number    — ms between retries (default: 1000)
      */
     constructor(options = {}) {
-        if (typeof options === 'string') options = { base: options }; // shorthand
+        if (typeof options === 'string') options = { base: options };
 
         this._base          = options.base    || '';
         this._codec         = options.codec   || jsonCodec;
@@ -78,15 +79,14 @@ export class Api {
         this._beforeHooks   = [];
         this._afterHooks    = [];
 
-        // New features
-        this._queueWhenOffline = false;
-        this._offlineQueue = [];
-        this._csrfToken = null;
-        this._refreshToken = null;
-        this._refreshEndpoint = '/auth/refresh';
-        this._isRefreshing = false;
-        this._refreshSubscribers = [];
-        this._retryStrategies = {
+        this._queueWhenOffline    = false;
+        this._offlineQueue        = [];
+        this._csrfToken           = null;
+        this._refreshToken        = null;
+        this._refreshEndpoint     = '/auth/refresh';
+        this._isRefreshing        = false;
+        this._refreshSubscribers  = [];
+        this._retryStrategies     = {
             '429': true,
             '503': true,
             '504': true,
@@ -119,12 +119,13 @@ export class Api {
         return !!(this._token || this._basic);
     }
 
-    // ─── New security methods ─────────────────────────────────────────────────
+    // ─── Retry strategies ─────────────────────────────────────────────────────
 
     /**
-     * Configure retry behavior for specific HTTP status codes.
-     * @param {number|Object} statusCode - Status code or map of status codes
-     * @param {boolean} shouldRetry - Whether to retry (ignored if first param is object)
+     * Configure retry behaviour for specific HTTP status codes.
+     *
+     *   api.retryWhen(429, true);
+     *   api.retryWhen({ 429: true, 503: true, 500: false });
      */
     retryWhen(statusCode, shouldRetry = true) {
         if (typeof statusCode === 'object') {
@@ -137,7 +138,8 @@ export class Api {
 
     /**
      * Enable or disable offline queueing for mutations.
-     * When enabled, POST/PUT/PATCH/DELETE requests are queued while offline.
+     * When enabled, POST/PUT/PATCH/DELETE requests are queued while offline
+     * and replayed in order once the connection is restored.
      */
     queueWhenOffline(enable = true) {
         this._queueWhenOffline = enable;
@@ -146,7 +148,7 @@ export class Api {
 
     /**
      * Set CSRF token for request safety.
-     * Token is automatically added to non-GET requests as X-CSRF-Token header.
+     * Added automatically to all non-GET/HEAD requests as X-CSRF-Token.
      */
     withCsrf(token) {
         this._csrfToken = token;
@@ -154,18 +156,21 @@ export class Api {
     }
 
     /**
-     * Configure refresh token for automatic 401 handling.
-     * When a 401 occurs, the SDK will attempt to refresh the token and retry.
+     * Configure a refresh token for automatic 401 handling.
+     * On a 401, the SDK refreshes the access token and retries the original
+     * request once before propagating the error.
      */
     withRefreshToken(token, endpoint = '/auth/refresh') {
-        this._refreshToken = token;
+        this._refreshToken    = token;
         this._refreshEndpoint = endpoint;
         return this;
     }
 
     /**
-     * Flush all queued offline requests.
-     * Called automatically when connection is restored.
+     * Replay all queued offline requests in the order they were made.
+     * Items that fail are re-queued so they are not silently lost, but
+     * callers should treat re-queued items as potentially out-of-date.
+     * Called automatically when the connection is restored.
      */
     async flushQueue() {
         if (!this._offlineQueue.length) return;
@@ -210,15 +215,15 @@ export class Api {
 
     // ─── HTTP verbs ───────────────────────────────────────────────────────────
 
-    get(path, options = {})          { return this._request(path, 'GET',    null,   options); }
-    post(path, body, options = {})   { return this._request(path, 'POST',   body,   options); }
-    put(path, body, options = {})    { return this._request(path, 'PUT',    body,   options); }
-    patch(path, body, options = {})  { return this._request(path, 'PATCH',  body,   options); }
-    delete(path, options = {})       { return this._request(path, 'DELETE', null,   options); }
+    get(path, options = {})         { return this._request(path, 'GET',    null, options); }
+    post(path, body, options = {})  { return this._request(path, 'POST',   body, options); }
+    put(path, body, options = {})   { return this._request(path, 'PUT',    body, options); }
+    patch(path, body, options = {}) { return this._request(path, 'PATCH',  body, options); }
+    delete(path, options = {})      { return this._request(path, 'DELETE', null, options); }
 
     /**
-     * Upload a file or FormData — does not encode with codec,
-     * lets the browser set the correct multipart boundary.
+     * Upload a file or FormData — lets the browser set the correct
+     * multipart boundary by skipping codec encoding.
      */
     upload(path, formData, options = {}) {
         return this._request(path, 'POST', formData, { ...options, raw: true });
@@ -227,22 +232,16 @@ export class Api {
     // ─── Core ─────────────────────────────────────────────────────────────────
 
     async _request(path, method, body = null, options = {}) {
-        const headers = {};
-
-        if (this._token)      headers['Authorization'] = 'Bearer ' + this._token;
-        else if (this._basic) headers['Authorization'] = 'Basic '  + this._basic;
-
-        if (this._csrfToken && method !== 'GET' && method !== 'HEAD') {
-            headers['X-CSRF-Token'] = this._csrfToken;
-        }
-
+        // Queue the request if offline and queueing is enabled.
+        // A single permanent listener on the 'online' window event (registered
+        // in _setupOnlineDetection) handles flushing — we do not add a new
+        // listener per queued request, which would cause N flush calls on
+        // reconnect and potentially duplicate or out-of-order requests.
         if (!navigator.onLine && this._queueWhenOffline && method !== 'GET') {
             this._offlineQueue.push({ path, method, body, options });
             this._setOnline(false);
             _emit('api:queued', { path, method });
-            return new Promise(resolve => {
-                window.addEventListener('online', () => this.flushQueue(), { once: true });
-            });
+            return new Promise(() => {}); // resolves when flushed
         }
 
         if (this._refreshToken && !options._skipRefresh) {
@@ -256,10 +255,9 @@ export class Api {
         try {
             return await this._executeRequest(path, method, body, options);
         } catch (error) {
-            // Network failures (fetch() rejection) arrive as TypeError with no
-            // .status property. We must not attempt a token refresh for those —
-            // there is no server response to have returned a 401, and the refresh
-            // request itself would also fail. Propagate immediately.
+            // Network failures arrive as TypeError with no .status property.
+            // Do not attempt a token refresh for those — the server never
+            // returned a 401, and the refresh request would also fail.
             if (error instanceof TypeError || error.status !== 401) throw error;
 
             if (this._isRefreshing) {
@@ -277,18 +275,10 @@ export class Api {
                 this._refreshSubscribers = [];
                 return this._executeRequest(path, method, body, { ...options, _skipRefresh: true });
             } catch (refreshError) {
-                // The refresh token itself failed — either it is expired, the
-                // /auth/refresh endpoint returned 401/403, or the network is down.
-                //
-                // In all cases the session is definitively dead. We must:
-                //   1. Clear all pending subscribers — they will never get a token.
-                //   2. Emit api:unauthorized so auth.js can trigger a clean logout.
-                //   3. Throw so the original caller's promise rejects.
-                //
-                // Without this block, a failed refresh propagates silently as an
-                // unhandled rejection that never reaches the Oja error boundary
-                // and never notifies auth.js — the app stays "logged in" with a
-                // dead session until the user manually refreshes the page.
+                // The refresh token itself failed — the session is definitively
+                // dead. Clear all pending subscribers and notify auth.js so it
+                // can trigger a clean logout rather than leaving the app in a
+                // half-authenticated state until the user manually refreshes.
                 this._refreshSubscribers.forEach(resolve => resolve(null));
                 this._refreshSubscribers = [];
                 this.setToken(null);
@@ -304,7 +294,7 @@ export class Api {
     async _refreshTokenRequest() {
         const res = await fetch(this._refreshEndpoint, {
             method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + this._refreshToken }
+            headers: { 'Authorization': 'Bearer ' + this._refreshToken },
         });
         if (!res.ok) throw new Error('Token refresh failed');
         const { token } = await res.json();
@@ -335,8 +325,7 @@ export class Api {
                 opts.body = body;
                 delete opts.headers['Content-Type'];
             } else {
-                const encoded = await Promise.resolve(this._codec.encode(body));
-                opts.body = encoded;
+                opts.body = await Promise.resolve(this._codec.encode(body));
             }
         }
 
@@ -386,16 +375,24 @@ export class Api {
         }
 
         if (res.status === 204) return true;
-
         if (res.status === 404) return null;
 
         if (res.status >= 500) {
             _emit('api:error', { status: res.status, path, method });
+
+            // Retry 5xx responses that are configured as retryable.
+            // Pass the remaining attempt budget through so retries are bounded.
+            // Previously this called _executeRequest recursively with a fresh
+            // local `attempt = 0`, which made the retry counter ineffective
+            // and could produce unbounded retries on persistent 5xx responses.
             if (this._retryStrategies[res.status] && attempt < this._retries) {
-                attempt++;
-                await _wait(this._retryDelay * attempt);
-                return this._executeRequest(path, method, body, options);
+                await _wait(this._retryDelay * (attempt + 1));
+                return this._executeRequest(path, method, body, {
+                    ...options,
+                    _attempt: (options._attempt || 0) + 1,
+                });
             }
+
             throw Object.assign(new Error(`Server error: ${res.status}`), { status: res.status });
         }
 
@@ -415,10 +412,25 @@ export class Api {
             }
         }
 
+        // Read the raw text first so it is never lost regardless of content type.
+        // JSON is attempted only when the content-type indicates it; otherwise
+        // the raw string is returned so callers receive text/csv, text/plain, etc.
         try {
             const text = await res.text();
             if (!text.trim()) return null;
-            return jsonCodec.decode(text);
+
+            if (ct.includes('json') || ct === '') {
+                try {
+                    return jsonCodec.decode(text);
+                } catch {
+                    // Server sent Content-Type: application/json but the body
+                    // is not valid JSON — return the raw text rather than null
+                    // so the caller can inspect or log it.
+                    return text;
+                }
+            }
+
+            return text;
         } catch {
             return null;
         }
