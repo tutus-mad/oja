@@ -53,7 +53,7 @@ export { validate }                                       from './js/validate.js
 // ─── Events ───────────────────────────────────────────────────────────────────
 export {
     on, once, off, emit, listen, listenOnce, waitFor,
-    debounce, throttle, rafThrottle, once as onceFn,
+    debounce, throttle, rafThrottle,
     keys,
     onScroll, onScrollDirection, isInViewport, getViewportPosition,
     onVisible, onceVisible, unobserve, createVisibilityObserver,
@@ -67,15 +67,23 @@ export { auth }                                           from './js/auth.js';
 export { Channel, go, pipeline, fanOut, fanIn,
     merge, split }                                   from './js/channel.js';
 
+// ─── Plugin system ───────────────────────────────────────────────────────────
+// Single entry point for all Oja extension mechanisms.
+// Wraps: component.hooks, ui.widget.register, adapter.register,
+//        router.Use, api hooks, auth hooks, codec registry, named renderers.
+export { plugin }                                         from './js/plugin.js';
+
 // ─── Dev tools ────────────────────────────────────────────────────────────────
 export { logger }                                         from './js/logger.js';
 export { debug }                                          from './js/debug.js';
 export { adapter }                                        from './js/adapter.js';
 
 // ─── Version ──────────────────────────────────────────────────────────────────
+// Single source of truth for version — OJA.version references this constant
+// so they can never diverge when the version is bumped.
 export const VERSION = '0.0.1';
 export const OJA = {
-    version:     '0.0.1',
+    version:     VERSION,
     name:        'Oja Framework',
     description: 'Zero-boilerplate SPA framework',
 };
