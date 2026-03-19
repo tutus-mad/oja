@@ -128,11 +128,11 @@
     // ── Reactive state ────────────────────────────────────────────────────────
 
     const [levelIdx, setLevelIdx] = context('gameLevel', 0);
-    const [phase,    setPhase]    = state('idle');   // idle | loading | listening | thinking | done
-    const [spoken,   setSpoken]   = state([]);
+    const [phase,    setPhase]    = state('idle');
+    const[spoken,   setSpoken]   = state([]);
     const [score,    setScore]    = state(0);
     const [useAI,    setUseAI]    = state(false);
-    const [whisperReady, setWhisperReady] = state(false);
+    const[whisperReady, setWhisperReady] = state(false);
 
     // ── Whisper loader ────────────────────────────────────────────────────────
 
@@ -142,26 +142,19 @@
         setPhase('loading');
         updateStatus('⏳ Loading Whisper (25MB)…');
         try {
-            const { pipeline, env } = await import(
-                'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2'
-                );
+            const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
             env.allowLocalModels = false;
             env.useBrowserCache  = true;
 
-            whisperPipeline = await pipeline(
-                'automatic-speech-recognition',
-                'Xenova/whisper-tiny.en',
-                {
-                    progress_callback: (d) => {
-                        if (d.status === 'progress') {
-                            const pct = Math.round(d.progress * 100);
-                            updateStatus(`⏳ Whisper ${pct}%…`);
-                        }
-                    },
-                }
-            );
+            whisperPipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
+                progress_callback: (d) => {
+                    if (d.status === 'progress') {
+                        const pct = Math.round(d.progress * 100);
+                        updateStatus(`⏳ Whisper ${pct}%…`);
+                    }
+                },
+            });
 
-            // Warmup pass so first real transcription isn't slow
             await whisperPipeline(new Float32Array(16000));
             setWhisperReady(true);
             setPhase('idle');
@@ -175,24 +168,17 @@
     }
 
     // ── Channel pipeline ──────────────────────────────────────────────────────
-    // audioChannel  receives { blob, sampleRate } from the recorder
-    //               OR a plain string transcript from browser STT.
-    // resultChannel receives the scored result array after processing.
 
     const audioChannel  = new Channel(1);
     const resultChannel = new Channel(1);
 
-    // Stage 1 — decode audio (Whisper) or pass through (browser STT)
     go(async () => {
         for await (const payload of audioChannel) {
             let transcript = '';
-
             try {
                 if (typeof payload === 'string') {
-                    // Browser STT path — already a transcript string
                     transcript = payload;
                 } else {
-                    // Whisper path — payload is { blob, audioCtx }
                     const { blob, audioCtx } = payload;
                     const buf     = await blob.arrayBuffer();
                     const decoded = await audioCtx.decodeAudioData(buf);
@@ -208,12 +194,7 @@
 
                 updateTranscript(`"${transcript.trim()}"`);
 
-                const words   = transcript.toLowerCase()
-                    .replace(/[^a-z0-9\s]/g, '')
-                    .trim()
-                    .split(/\s+/)
-                    .filter(Boolean);
-
+                const words   = transcript.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(Boolean);
                 const level   = LEVELS[levelIdx()];
                 const targets = level.map(l => l.w);
 
@@ -234,7 +215,6 @@
         }
     });
 
-    // Stage 2 — apply scored result to reactive state
     go(async () => {
         for await (const results of resultChannel) {
             setSpoken(results.map(r => r.spoken));
@@ -317,15 +297,15 @@
 
         if (p === 'idle') {
             btnSpeak.className    = 'btn-speak';
-            btnSpeak.textContent  = '🎤 Hold to Speak';
-            hintEl.textContent    = 'Press and hold, then say all the words in order';
+            btnSpeak.textContent  = '🎤 Click to Speak';
+            hintEl.textContent    = 'Click, say all the words, then click again to stop';
             btnNext.style.display = 'none';
         }
 
         if (p === 'listening') {
             btnSpeak.style.transform = 'scale(0.96)';
             btnSpeak.className   = 'btn-speak active';
-            btnSpeak.textContent = '🔴 Listening… release to stop';
+            btnSpeak.textContent = '🔴 Listening… click to stop';
             hintEl.textContent   = 'Say all the words now';
         }
 
@@ -389,18 +369,19 @@
     on(aiToggle, 'click', async () => {
         const turningOn = !useAI();
         setUseAI(turningOn);
-
-        if (turningOn && !whisperReady()) {
-            await loadWhisper();
-        }
+        if (turningOn && !whisperReady()) await loadWhisper();
     });
 
-    on(btnSpeak, 'mousedown',  startListening);
-    on(btnSpeak, 'touchstart', startListening, { passive: false });
-    on(btnSpeak, 'mouseup',    stopListening);
-    on(btnSpeak, 'mouseleave', stopListening);
-    on(btnSpeak, 'touchend',   stopListening);
-
+    // Replaced mouse Hold events with a simple Click toggle to prevent micro-clicks causing infinite fail loops
+    on(btnSpeak, 'click', (e) => {
+        if (e) e.preventDefault();
+        const p = phase();
+        if (p === 'idle' || p === 'done') {
+            startListening(e);
+        } else if (p === 'listening') {
+            stopListening(e);
+        }
+    });
 
     on(btnNext, 'click', () => {
         if (levelIdx() < LEVELS.length - 1) setLevelIdx(levelIdx() + 1);
@@ -409,13 +390,14 @@
     // ── Recording ─────────────────────────────────────────────────────────────
 
     let mediaRecorder  = null;
-    let audioChunks    = [];
+    let audioChunks    =[];
     let audioCtx       = null;
     let recognition    = null;
     let thinkingTimer  = null;
+    let _micStream     = null;
 
     function startListening(e) {
-        e.preventDefault();
+        if (e) e.preventDefault();
         if (phase() === 'thinking' || phase() === 'listening' || phase() === 'loading') return;
 
         setPhase('listening');
@@ -439,12 +421,15 @@
     }
 
     function stopListening(e) {
-        e.preventDefault();
+        if (e) e.preventDefault();
         if (phase() !== 'listening') return;
 
         if (mediaRecorder?.state === 'recording') {
             mediaRecorder.stop();
-            mediaRecorder.stream?.getTracks().forEach(t => t.stop());
+        }
+
+        if (_micStream) {
+            _micStream.getTracks().forEach(t => t.stop());
         }
 
         if (recognition) {
@@ -456,7 +441,6 @@
         armThinkingTimeout();
     }
 
-    // Fallback: if pipeline never resolves after 10s, reset to idle
     function armThinkingTimeout() {
         clearTimeout(thinkingTimer);
         thinkingTimer = setTimeout(() => {
@@ -467,7 +451,6 @@
         }, 10000);
     }
 
-    // Clear the timeout once pipeline delivers a result
     effect(() => {
         if (phase() === 'done') clearTimeout(thinkingTimer);
     });
@@ -479,9 +462,16 @@
             }
             if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks   = [];
+            _micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            // Abort if user clicked stop while we were waiting for microphone permissions
+            if (phase() !== 'listening') {
+                _micStream.getTracks().forEach(t => t.stop());
+                return;
+            }
+
+            mediaRecorder = new MediaRecorder(_micStream);
+            audioChunks   =[];
 
             mediaRecorder.ondataavailable = (e) => {
                 if (e.data.size > 0) audioChunks.push(e.data);
@@ -504,7 +494,6 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
         if (!SpeechRecognition) {
-            // Neither API available — use demo transcript so the UI still works
             updateStatus('▶ No STT available — using demo transcript');
             const level = LEVELS[levelIdx()];
             setTimeout(async () => {
@@ -525,7 +514,6 @@
 
         recognition.onerror = (e) => {
             console.warn('[game] speech error:', e.error);
-            // Send empty transcript so pipeline resolves rather than hanging
             audioChannel.send('');
         };
 
@@ -533,7 +521,12 @@
             if (phase() === 'listening') setPhase('thinking');
         };
 
-        recognition.start();
+        try {
+            recognition.start();
+        } catch (e) {
+            console.warn(e);
+            audioChannel.send('');
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -549,7 +542,7 @@
     }
 
     function editDist(a, b) {
-        const m = Array.from({ length: b.length + 1 }, (_, i) => [i]);
+        const m = Array.from({ length: b.length + 1 }, (_, i) =>[i]);
         for (let j = 0; j <= a.length; j++) m[0][j] = j;
         for (let i = 1; i <= b.length; i++) {
             for (let j = 1; j <= a.length; j++) {

@@ -291,7 +291,27 @@ function _translate(key, ...args) {
 
 function _processBlocks(html, data, escape) {
     if (!html.includes('{{')) return html;
-    return _evalTemplate(html, data, escape);
+
+    // Mask <template> contents so they aren't processed by the outer render
+    const templates =[];
+    let maskedHtml = html;
+    if (html.includes('<template')) {
+        maskedHtml = html.replace(/(<template\b[^>]*>)([\s\S]*?)(<\/template>)/gi, (match, open, content, close) => {
+            templates.push(content);
+            return `${open}__OJA_TPL_${templates.length - 1}__${close}`;
+        });
+    }
+
+    let processed = _evalTemplate(maskedHtml, data, escape);
+
+    // Unmask templates back to original state
+    if (templates.length > 0) {
+        templates.forEach((content, i) => {
+            processed = processed.replace(`__OJA_TPL_${i}__`, () => content);
+        });
+    }
+
+    return processed;
 }
 
 function _evalTemplate(src, data, escape) {
