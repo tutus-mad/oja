@@ -1,3 +1,4 @@
+// src/js/ui/dragdrop.js
 /**
  * oja/dragdrop.js
  * Drag and drop utilities — reorder lists, file drop zones, and draggable elements.
@@ -96,10 +97,12 @@ let _touchListenersAdded = false;
 
 // ─── Reorderable lists ────────────────────────────────────────────────────────
 
-const _reorderLists = new Map(); // listElement -> { options, observer }
+const _reorderLists = new Map(); // listElement -> { opts, observer }
 
 /**
- * Make a list reorderable via drag and drop
+ * Make a list reorderable via drag and drop.
+ * Items can be dragged to any position within the list; onReorder fires
+ * after every successful drop with the new ordered array of child elements.
  *
  *   dragdrop.reorder('#host-list', {
  *       onReorder: (items) => saveOrder(items),
@@ -130,28 +133,29 @@ export function reorder(target, options = {}) {
 
     const opts = { ...defaults, ...options };
 
-    // Store for cleanup
     _reorderLists.set(list, { opts, items: [] });
 
-    // Make all current items draggable
     _initListItems(list, opts);
 
-    // Watch for new items added to the list
+    // Wire drop handling on the list itself so items dropped anywhere within
+    // it are caught, including drops between items and at the end of the list.
+    _setupListDrop(list, opts);
+
     const observer = new MutationObserver((mutations) => {
         mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
-                if (node.nodeType === 1) { // Element node
+                if (node.nodeType === 1) {
                     _makeDraggable(node, opts, list);
                 }
             });
         });
     });
 
-    observer.observe(list, { childList: true, subtree: true });
+    observer.observe(list, { childList: true, subtree: false });
     _reorderLists.get(list).observer = observer;
 
     return {
-        destroy: () => _destroyReorder(list)
+        destroy: () => _destroyReorder(list),
     };
 }
 
@@ -162,7 +166,8 @@ function _initListItems(list, opts) {
 }
 
 function _makeDraggable(el, opts, list) {
-    if (el.draggable) return; // Already initialized
+    if (el.dataset.ojaDraggable) return;
+    el.dataset.ojaDraggable = 'true';
 
     const dragHandle = opts.handle ? el.querySelector(opts.handle) : el;
     if (!dragHandle) return;
@@ -170,25 +175,20 @@ function _makeDraggable(el, opts, list) {
     dragHandle.setAttribute('draggable', 'true');
     dragHandle.style.cursor = 'grab';
 
-    // Store reference to the parent list
     el._dragList = list;
     el._dragOptions = opts;
 
-    // Drag start handler
     dragHandle.addEventListener('dragstart', (e) => {
         e.stopPropagation();
 
-        const item = e.target.closest(opts.handle ? '[draggable="true"]' : null)?.closest('*') || el;
+        const item = opts.handle ? el : e.currentTarget;
 
-        // Apply classes
         item.classList.add(opts.dragClass);
         item.classList.add(opts.chosenClass);
 
-        // Set drag data
         e.dataTransfer.setData('text/plain', item.id || item.dataset.id || '');
         e.dataTransfer.effectAllowed = 'move';
 
-        // Create custom drag image if specified
         if (opts.ghostClass) {
             const ghost = item.cloneNode(true);
             ghost.classList.add(opts.ghostClass);
@@ -199,51 +199,136 @@ function _makeDraggable(el, opts, list) {
             setTimeout(() => ghost.remove(), 0);
         }
 
-        // Store drag state
         _dragState.active = true;
-        _dragState.source = item;
+        _dragState.source = el;
         _dragState.data = {
-            id: item.id || item.dataset.id,
-            html: item.outerHTML,
-            index: Array.from(list.children).indexOf(item)
+            id: el.id || el.dataset.id,
+            html: el.outerHTML,
+            index: Array.from(list.children).indexOf(el),
         };
 
-        if (opts.onDragStart) opts.onDragStart(item, e);
+        if (opts.onDragStart) opts.onDragStart(el, e);
     });
 
-    // Drag end handler
     dragHandle.addEventListener('dragend', (e) => {
-        const item = e.target.closest('[draggable="true"]')?.closest('*') || el;
+        el.classList.remove(opts.dragClass);
+        el.classList.remove(opts.chosenClass);
+        el.style.opacity = '';
 
-        item.classList.remove(opts.dragClass);
-        item.classList.remove(opts.chosenClass);
+        // Remove any placeholder inserted during the drag
+        const placeholder = list.querySelector('.oja-drag-placeholder');
+        if (placeholder) placeholder.remove();
 
         _dragState.active = false;
         _dragState.source = null;
 
-        if (opts.onDragEnd) opts.onDragEnd(item, e);
+        if (opts.onDragEnd) opts.onDragEnd(el, e);
     });
 
-    // Prevent default to allow drop
-    dragHandle.addEventListener('dragover', (e) => e.preventDefault());
+    // dragover on the item itself controls the visual insertion point.
+    // We show a placeholder above or below based on cursor position.
+    dragHandle.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const dragging = _dragState.source;
+        if (!dragging || dragging === el) return;
+
+        const rect = el.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const after = e.clientY > midY;
+
+        _movePlaceholder(list, el, after, dragging);
+    });
+}
+
+/**
+ * Set up the drop handler on the list container.
+ * This is what was entirely missing — without a drop listener on the list,
+ * releasing the mouse over a list item does nothing; the browser cancels the
+ * drag and the DOM is never updated.
+ */
+function _setupListDrop(list, opts) {
+    list.addEventListener('dragover', (e) => {
+        // Allow drops on the list background (between all items or after the last).
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+    });
+
+    list.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const dragging = _dragState.source;
+        if (!dragging) return;
+
+        // Remove the visual placeholder
+        const placeholder = list.querySelector('.oja-drag-placeholder');
+        if (placeholder) {
+            // Insert the real element where the placeholder is sitting
+            list.insertBefore(dragging, placeholder);
+            placeholder.remove();
+        } else {
+            // No placeholder (drop landed on the list background) — append
+            list.appendChild(dragging);
+        }
+
+        dragging.style.opacity = '';
+
+        if (opts.onReorder) {
+            opts.onReorder(Array.from(list.children));
+        }
+    });
+
+    // Clean up placeholder if the drag leaves the list entirely
+    list.addEventListener('dragleave', (e) => {
+        // Only fire if the pointer has genuinely left the list, not just
+        // moved to a child element (relatedTarget is still inside the list).
+        if (list.contains(e.relatedTarget)) return;
+        const placeholder = list.querySelector('.oja-drag-placeholder');
+        if (placeholder) placeholder.remove();
+    });
+}
+
+/**
+ * Show a thin placeholder element at the insertion point so the user can
+ * see exactly where the dragged item will land before releasing.
+ */
+function _movePlaceholder(list, referenceEl, insertAfter, dragging) {
+    let placeholder = list.querySelector('.oja-drag-placeholder');
+    if (!placeholder) {
+        placeholder = document.createElement('div');
+        placeholder.className = 'oja-drag-placeholder';
+        placeholder.style.cssText = 'height:2px;background:var(--oja-accent,#4f8ef7);margin:2px 0;border-radius:1px;pointer-events:none;';
+    }
+
+    if (insertAfter) {
+        referenceEl.after(placeholder);
+    } else {
+        referenceEl.before(placeholder);
+    }
+
+    // Dim the source item so the list doesn't look like it has a duplicate
+    dragging.style.opacity = '0.4';
 }
 
 function _destroyReorder(list) {
     const data = _reorderLists.get(list);
-    if (data && data.observer) {
-        data.observer.disconnect();
-    }
+    if (data?.observer) data.observer.disconnect();
     _reorderLists.delete(list);
 
-    // Remove draggable attributes
     Array.from(list.children).forEach(child => {
         if (child._dragOptions) {
-            const handle = child._dragOptions.handle ?
-                child.querySelector(child._dragOptions.handle) : child;
+            const handle = child._dragOptions.handle
+                ? child.querySelector(child._dragOptions.handle)
+                : child;
             if (handle) {
                 handle.removeAttribute('draggable');
                 handle.style.cursor = '';
             }
+            delete child._dragList;
+            delete child._dragOptions;
+            delete child.dataset.ojaDraggable;
         }
     });
 }
@@ -253,7 +338,7 @@ function _destroyReorder(list) {
 const _dropZones = new Map(); // zoneElement -> options
 
 /**
- * Create a file drop zone
+ * Create a file drop zone.
  *
  *   dragdrop.dropZone('#upload-area', {
  *       onDrop: (files) => uploadFiles(files),
@@ -301,7 +386,6 @@ export function dropZone(target, options = {}) {
 
         const files = Array.from(e.dataTransfer.files);
 
-        // Filter by accept types
         let validFiles = files;
         if (opts.accept.length > 0) {
             validFiles = files.filter(file => {
@@ -318,15 +402,14 @@ export function dropZone(target, options = {}) {
             }
         }
 
-        // Filter by size
         if (opts.maxSize < Infinity) {
+            const before = validFiles.length;
             validFiles = validFiles.filter(file => file.size <= opts.maxSize);
-            if (validFiles.length !== files.length && opts.onError) {
+            if (validFiles.length !== before && opts.onError) {
                 opts.onError('Some files exceed the maximum size limit');
             }
         }
 
-        // Handle multiple flag
         if (!opts.multiple && validFiles.length > 1) {
             validFiles = [validFiles[0]];
             if (opts.onError) opts.onError('Multiple files not allowed');
@@ -347,7 +430,7 @@ export function dropZone(target, options = {}) {
             zone.removeEventListener('dragleave', dragLeaveHandler);
             zone.removeEventListener('drop', dropHandler);
             _dropZones.delete(zone);
-        }
+        },
     };
 }
 
@@ -356,7 +439,7 @@ export function dropZone(target, options = {}) {
 const _dragSources = new WeakMap(); // element -> options
 
 /**
- * Make any element draggable with custom data
+ * Make any element draggable with custom data.
  *
  *   dragdrop.draggable('.host-card', {
  *       data: (el) => ({ id: el.dataset.id }),
@@ -436,7 +519,7 @@ export function draggable(target, options = {}) {
                     _dragSources.delete(el);
                 }
             });
-        }
+        },
     };
 }
 
@@ -445,7 +528,7 @@ export function draggable(target, options = {}) {
 const _dropTargets = new WeakMap(); // element -> options
 
 /**
- * Make an element accept drops
+ * Make an element accept drops.
  *
  *   dragdrop.dropTarget('.folder', {
  *       accept: (el, data) => data.type === 'host',
@@ -482,7 +565,6 @@ export function dropTarget(target, options = {}) {
                     e.dataTransfer.dropEffect = 'none';
                 }
             } catch {
-                // Not JSON data, check if it's files
                 if (e.dataTransfer.files.length > 0) {
                     if (opts.accept(el, { files: e.dataTransfer.files })) {
                         e.dataTransfer.dropEffect = 'move';
@@ -510,7 +592,6 @@ export function dropTarget(target, options = {}) {
                     if (opts.onDrop) opts.onDrop(el, data, e);
                 }
             } catch {
-                // Handle file drop
                 if (e.dataTransfer.files.length > 0 && opts.accept(el, { files: e.dataTransfer.files })) {
                     if (opts.onDrop) opts.onDrop(el, { files: e.dataTransfer.files }, e);
                 }
@@ -535,14 +616,16 @@ export function dropTarget(target, options = {}) {
                     _dropTargets.delete(el);
                 }
             });
-        }
+        },
     };
 }
 
 // ─── Sortable between lists ───────────────────────────────────────────────────
 
 /**
- * Create sortable lists that can exchange items
+ * Create sortable lists that can exchange items.
+ * Items dropped into another list are inserted at the cursor position,
+ * not blindly appended to the end.
  *
  *   const sortable = dragdrop.sortable(['#list1', '#list2'], {
  *       onEnd: (evt) => saveChanges(evt),
@@ -550,9 +633,9 @@ export function dropTarget(target, options = {}) {
  *   });
  */
 export function sortable(lists, options = {}) {
-    const elements = lists.map(list =>
-        typeof list === 'string' ? document.querySelector(list) : list
-    ).filter(Boolean);
+    const elements = lists
+        .map(list => typeof list === 'string' ? document.querySelector(list) : list)
+        .filter(Boolean);
 
     const defaults = {
         group: 'default',
@@ -568,7 +651,6 @@ export function sortable(lists, options = {}) {
 
     const opts = { ...defaults, ...options };
 
-    // Make each list a reorderable list and drop target
     const instances = elements.map(list => {
         const reorderInstance = reorder(list, {
             handle: opts.handle,
@@ -582,7 +664,7 @@ export function sortable(lists, options = {}) {
                     item,
                     from: item._sourceList,
                     to: item._targetList || item._sourceList,
-                    originalEvent: e
+                    originalEvent: e,
                 });
                 delete item._sourceList;
                 delete item._targetList;
@@ -590,16 +672,33 @@ export function sortable(lists, options = {}) {
         });
 
         const targetInstance = dropTarget(list, {
-            accept: (el, data) => true, // Accept anything from same group
+            accept: () => true,
             onDrop: (listEl, data, e) => {
                 const item = _dragState.source;
                 if (!item || item._sourceList === listEl) return;
 
-                // Move the element
-                item._targetList = listEl;
-                listEl.appendChild(item);
+                // Insert at the position nearest the drop point rather than
+                // appending at the end, which would always feel wrong when
+                // dropping into the middle of a populated list.
+                const children = Array.from(listEl.children);
+                let insertBefore = null;
 
-                if (opts.onAdd) opts.onAdd({ item, from: item._sourceList, to: listEl });
+                for (const child of children) {
+                    const rect = child.getBoundingClientRect();
+                    if (e.clientY < rect.top + rect.height / 2) {
+                        insertBefore = child;
+                        break;
+                    }
+                }
+
+                item._targetList = listEl;
+                if (insertBefore) {
+                    listEl.insertBefore(item, insertBefore);
+                } else {
+                    listEl.appendChild(item);
+                }
+
+                if (opts.onAdd)    opts.onAdd({ item, from: item._sourceList, to: listEl });
                 if (opts.onUpdate) opts.onUpdate({ item, from: item._sourceList, to: listEl });
             },
             onDragOver: (listEl) => listEl.classList.add('sortable-active'),
@@ -612,18 +711,22 @@ export function sortable(lists, options = {}) {
     return {
         destroy: () => {
             instances.forEach(inst => {
-                if (inst.reorderInstance) inst.reorderInstance.destroy();
-                if (inst.targetInstance) inst.targetInstance.destroy();
+                inst.reorderInstance?.destroy();
+                inst.targetInstance?.destroy();
             });
-        }
+        },
     };
 }
 
 // ─── Touch support ────────────────────────────────────────────────────────────
 
 /**
- * Enable touch drag and drop for all draggable elements
- * This is automatically enabled by default, but can be disabled
+ * Enable touch drag and drop for all draggable elements.
+ * Called automatically on touch devices; call manually only if you have
+ * cleaned up a previous instance via the returned dispose function.
+ *
+ * Returns a dispose function that removes the listeners and resets state,
+ * allowing touch support to be re-enabled cleanly if needed.
  */
 export function enableTouchSupport() {
     if (_touchListenersAdded) return;
@@ -642,7 +745,6 @@ export function enableTouchSupport() {
         _dragState.startY = touch.clientY;
         _dragState.source = dragItem;
 
-        // Clone as ghost
         _dragState.ghost = dragItem.cloneNode(true);
         _dragState.ghost.style.position = 'fixed';
         _dragState.ghost.style.zIndex = '9999';
@@ -666,17 +768,14 @@ export function enableTouchSupport() {
         _dragState.currentX = touch.clientX;
         _dragState.currentY = touch.clientY;
 
-        if (_animationFrame) {
-            cancelAnimationFrame(_animationFrame);
-        }
+        if (_animationFrame) cancelAnimationFrame(_animationFrame);
 
         _animationFrame = requestAnimationFrame(() => {
             if (_dragState.ghost) {
                 _dragState.ghost.style.left = (_dragState.currentX - 20) + 'px';
-                _dragState.ghost.style.top = (_dragState.currentY - 20) + 'px';
+                _dragState.ghost.style.top  = (_dragState.currentY - 20) + 'px';
             }
 
-            // Find drop targets under touch point
             const elementsAtPoint = document.elementsFromPoint(_dragState.currentX, _dragState.currentY);
             for (const el of elementsAtPoint) {
                 if (_dropTargets.has(el)) {
@@ -691,26 +790,20 @@ export function enableTouchSupport() {
 
         e.preventDefault();
 
-        // Find drop target
         const elementsAtPoint = document.elementsFromPoint(_dragState.currentX, _dragState.currentY);
         for (const el of elementsAtPoint) {
             if (_dropTargets.has(el)) {
                 const data = _dragSources.get(_dragState.source)?.opts?.data?.(_dragState.source) || {};
-                const dropHandler = _dropTargets.get(el)?.opts?.onDrop;
-                if (dropHandler) {
-                    dropHandler(el, data, e);
-                }
+                const handler = _dropTargets.get(el)?.opts?.onDrop;
+                if (handler) handler(el, data, e);
                 break;
             }
         }
 
-        // Clean up
-        if (_dragState.ghost) {
-            _dragState.ghost.remove();
-        }
+        _dragState.ghost.remove();
         _dragState.source?.classList.remove('oja-touch-drag-original');
 
-        _dragState.ghost = null;
+        _dragState.ghost  = null;
         _dragState.source = null;
 
         if (_animationFrame) {
@@ -719,23 +812,23 @@ export function enableTouchSupport() {
         }
     };
 
-    document.addEventListener('touchstart', handleTouchStart, { passive: false });
-    document.addEventListener('touchmove', handleTouchMove, { passive: false });
-    document.addEventListener('touchend', handleTouchEnd);
+    document.addEventListener('touchstart',  handleTouchStart, { passive: false });
+    document.addEventListener('touchmove',   handleTouchMove,  { passive: false });
+    document.addEventListener('touchend',    handleTouchEnd);
     document.addEventListener('touchcancel', handleTouchEnd);
 
     _touchListenersAdded = true;
 
     return () => {
-        document.removeEventListener('touchstart', handleTouchStart);
-        document.removeEventListener('touchmove', handleTouchMove);
-        document.removeEventListener('touchend', handleTouchEnd);
+        document.removeEventListener('touchstart',  handleTouchStart);
+        document.removeEventListener('touchmove',   handleTouchMove);
+        document.removeEventListener('touchend',    handleTouchEnd);
         document.removeEventListener('touchcancel', handleTouchEnd);
         _touchListenersAdded = false;
     };
 }
 
-// ─── Export all ───────────────────────────────────────────────────────────────
+// ─── Export ───────────────────────────────────────────────────────────────────
 
 export const dragdrop = {
     reorder,
@@ -746,7 +839,7 @@ export const dragdrop = {
     enableTouchSupport,
 };
 
-// Auto-enable touch support by default
+// Auto-enable touch support on touch-capable devices
 if (typeof window !== 'undefined' && 'ontouchstart' in window) {
     enableTouchSupport();
 }
