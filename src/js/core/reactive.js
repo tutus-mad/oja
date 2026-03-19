@@ -292,6 +292,32 @@ class ReactiveSystem {
             defaultValue: initialValue
         });
 
+        // Cross-tab sync — when another tab writes to the same localStorage key,
+        // the browser fires a 'storage' event in every OTHER tab. We listen for
+        // this and update the reactive signal so the UI reflects the change
+        // without requiring a page refresh.
+        //
+        // Only localStorage triggers 'storage' events across tabs.
+        // sessionStorage is tab-isolated by design, so cross-tab sync only
+        // applies when store === 'local'.
+        //
+        // Example: Tab A changes the 'theme' context → localStorage updates →
+        // Tab B's storage event fires → Tab B's reactive signal updates →
+        // Tab B's effects re-run → Tab B's UI switches theme automatically.
+        if (store === 'local' && typeof window !== 'undefined') {
+            window.addEventListener('storage', (e) => {
+                // Only react to changes for this exact key from another tab.
+                // e.newValue is null when the key was deleted (i.e. logout).
+                if (e.key === key && e.newValue !== null) {
+                    try {
+                        write(JSON.parse(e.newValue));
+                    } catch {
+                        // Malformed value in storage — ignore rather than crash.
+                    }
+                }
+            });
+        }
+
         return [read, write];
     }
 
