@@ -1,3 +1,5 @@
+import { find as _find, findAll as _findAll } from './ui.js';
+
 /**
  * oja/_exec.js
  * Execute <script> tags that were injected via innerHTML.
@@ -13,14 +15,23 @@
  *
  * ─── Container injection ──────────────────────────────────────────────────────
  *
- * Every component script automatically receives a `container` variable — the
- * exact DOM element the component was mounted into. This enables true component
- * isolation: multiple instances of the same component on the same page each
- * get their own scoped reference, so querySelector() never bleeds across them.
+ * Every component script automatically receives three variables:
  *
- *   // Inside any component script — container is always available:
- *   const imgEl = container.querySelector('img');   // scoped to THIS instance
- *   const form  = container.querySelector('form');  // not the whole document
+ *   container  — the exact DOM element the component was mounted into.
+ *   find       — pre-bound to scope within container; no second argument needed.
+ *   findAll    — pre-bound to scope within container.
+ *
+ * This ensures DOM queries are always component-scoped without the developer
+ * having to remember to pass container explicitly:
+ *
+ *   // Barrel-imported find — still works outside components:
+ *   const btn = find(container, '#submit');
+ *
+ *   // Inside any component script — no second argument required:
+ *   const btn = find('#submit');   // automatically scoped to this instance
+ *
+ * Outside component scripts the barrel-exported `find` keeps its existing
+ * explicit-scope signature — nothing changes for non-component code.
  *
  * Used by:
  *   - out.js        (_ComponentOut.render)
@@ -44,8 +55,13 @@ export function execScripts(container, sourceUrl) {
         }
 
         if (old.type === 'module') {
-            const ctxKey = '__oja_ctx_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-            window[ctxKey] = container;
+            const ctxKey  = '__oja_ctx_'  + Date.now() + '_' + Math.random().toString(36).slice(2);
+            const helpKey = '__oja_hlp_'  + Date.now() + '_' + Math.random().toString(36).slice(2);
+            window[ctxKey]  = container;
+            window[helpKey] = {
+                find:    (sel, opts = {}) => _find(sel, { ...opts, scope: container }),
+                findAll: (sel)            => _findAll(sel, container),
+            };
 
             // Rewrite relative import specifiers to absolute URLs.
             //
@@ -89,7 +105,13 @@ export function execScripts(container, sourceUrl) {
                     }
                 );
 
-            const src = 'const container = window[' + JSON.stringify(ctxKey) + '];\ndelete window[' + JSON.stringify(ctxKey) + '];\n' + body;
+            const src = [
+                'const container = window[' + JSON.stringify(ctxKey)  + '];',
+                'delete window['             + JSON.stringify(ctxKey)  + '];',
+                'const { find, findAll } = window[' + JSON.stringify(helpKey) + '];',
+                'delete window['                     + JSON.stringify(helpKey) + '];',
+                body,
+            ].join('\n');
 
             const blob    = new Blob([src], { type: 'text/javascript' });
             const blobUrl = URL.createObjectURL(blob);

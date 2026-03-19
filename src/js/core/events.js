@@ -88,14 +88,20 @@ const _registry = new Map(); // event → [{ selector, fn, original, options }]
 const _passiveEvents = new Set(['scroll', 'touchstart', 'touchmove', 'wheel']);
 
 /**
- * Attach a delegated listener on document.body.
+ * Attach an event listener. Accepts either a CSS selector (delegated, via document.body)
+ * or a direct Element reference (direct addEventListener on that element).
  * fn receives (event, matchedElement).
- * Works for elements added to the DOM after on() is called.
  *
  *   on('.btn-delete', 'click', (e, el) => deleteItem(el.dataset.id));
+ *   on(myButtonEl,    'click', (e, el) => doSomething());
  */
 export function on(selector, eventName, fn, options = {}) {
     const { passive = _passiveEvents.has(eventName), capture = false } = options;
+
+    if (selector instanceof EventTarget) {
+        selector.addEventListener(eventName, fn, { passive, capture });
+        return { selector, eventName, fn };
+    }
 
     if (!_registry.has(eventName)) {
         _registry.set(eventName, []);
@@ -121,8 +127,16 @@ export function on(selector, eventName, fn, options = {}) {
 
 /**
  * Like on() but removes itself after the first match.
+ * Works with both CSS selectors and direct Element references.
  */
 export function once(selector, eventName, fn, options = {}) {
+    if (selector instanceof EventTarget) {
+        const wrapper = (e) => {
+            selector.removeEventListener(eventName, wrapper);
+            fn(e, selector);
+        };
+        return on(selector, eventName, wrapper, options);
+    }
     const wrapper = (e, el) => {
         off(selector, eventName, wrapper);
         fn(e, el);
@@ -131,9 +145,14 @@ export function once(selector, eventName, fn, options = {}) {
 }
 
 /**
- * Remove a specific delegated listener.
+ * Remove a specific listener. Mirrors the on() dual-mode signature.
+ * For direct elements, selector is the Element and fn is the original handler.
  */
 export function off(selector, eventName, fn) {
+    if (selector instanceof EventTarget) {
+        selector.removeEventListener(eventName, fn);
+        return;
+    }
     if (!_registry.has(eventName)) return;
     const handlers = _registry.get(eventName);
     const idx = handlers.findIndex(

@@ -10,7 +10,7 @@
  *   notify    — toast on milestone
  */
 
-import { Router, Out, context, notify } from '../../build/oja.core.min.js';
+import { Router, Out, context, notify } from '../../build/oja.core.esm.js';
 
 // ── Shared state — guestbook entries live here, survive navigation ────────────
 // Any page that calls context('entries') gets the same reactive value.

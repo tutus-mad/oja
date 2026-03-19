@@ -3,11 +3,11 @@
   Page 1 — Counter
 
   Demonstrates:
-    state()  — reactive value, single source of truth
-    effect() — all DOM updates live here, driven by state changes
-    on()     — event handling via Oja, not addEventListener
-    find()   — scoped DOM queries via Oja, not getElementById
-    notify   — milestone toast
+    context() — count lives here so it survives navigating away and back
+    effect()  — all DOM updates live here, driven by state changes
+    on()      — event handling via Oja, not addEventListener
+    find()    — scoped DOM queries via Oja, not getElementById
+    notify    — milestone toast
 -->
 <div class="card">
     <p class="card-title">Counter</p>
@@ -27,19 +27,19 @@
 </div>
 
 <script type="module">
-    import { state, effect, on, find, notify } from '../../../build/oja.core.min.js';
+    import { context, effect, on, notify } from '../../../build/oja.core.esm.js';
 
     const MAX = 10;
 
-    // ── State — one value, one setter, nothing else ───────────────────────────
-    const [count, setCount] = state(0);
+    // context() keeps count alive across navigation — state() would reset on remount
+    const [count, setCount] = context('count', 0);
 
-    // ── find() — Oja's scoped DOM helper, replaces getElementById ────────────
-    const countEl = find(container, '#count');
-    const barEl   = find(container, '#progress-bar');
-    const msgEl   = find(container, '#message');
-    const incrBtn = find(container, '#btn-increment');
-    const resetBtn = find(container, '#btn-reset');
+    // ── find() — injected by _exec.js, automatically scoped to this component ─
+    const countEl  = find('#count');
+    const barEl    = find('#progress-bar');
+    const msgEl    = find('#message');
+    const incrBtn  = find('#btn-increment');
+    const resetBtn = find('#btn-reset');
 
     // ── Effects — every DOM change flows from here, never written ad-hoc ──────
     effect(() => {

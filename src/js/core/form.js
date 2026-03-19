@@ -159,7 +159,7 @@ import { Out } from './out.js';
 const _dirtyState = new WeakMap(); // form -> Map<fieldName, { original, current, isDirty }>
 const _dirtyListeners = new WeakMap(); // form -> Set<function>
 const _fieldWatchers = new WeakMap(); // field -> Set<{ type, fn, debounced }>
-const _editorInstances = new WeakMap(); // field -> editor instance
+const _editorInstances = new Map(); // field -> editor instance — must be Map, not WeakMap, because collect() iterates it
 
 // ─── Core form handling ───────────────────────────────────────────────────────
 
@@ -871,7 +871,7 @@ export const form = {
         const el = _resolve(target);
         if (!el) return false;
 
-        const formState = _dirtyState.get(el);
+        const formState = _dirtyStateMap(el);
         if (!formState) return false;
 
         if (fieldName) {
@@ -891,7 +891,7 @@ export const form = {
         const el = _resolve(target);
         if (!el) return this;
 
-        const formState = _dirtyState.get(el);
+        const formState = _dirtyStateMap(el);
         if (!formState) return this;
 
         if (fieldName) {
@@ -951,10 +951,8 @@ export const form = {
     },
 
     _updateDirtyState(form) {
-        const entry = _dirtyState.get(form);
-        if (!entry) return;
-        // _dirtyState entries are { state: Map, dispose: fn }
-        const formState = entry.state || entry; // backwards-compat if ever called before setup
+        const formState = _dirtyStateMap(form);
+        if (!formState) return;
 
         for (const [name, input] of this._getFormFields(form)) {
             const current = this._getFieldValue(input);
@@ -1318,6 +1316,14 @@ export const form = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Unwraps the { state: Map, dispose: fn } entry stored by _setupDirtyTracking.
+// Returns the inner Map, or null if the form has not been tracked yet.
+function _dirtyStateMap(el) {
+    const entry = _dirtyState.get(el);
+    if (!entry) return null;
+    return entry.state ?? null;
+}
 
 function _resolve(target) {
     if (!target) return null;
