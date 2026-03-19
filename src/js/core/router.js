@@ -599,10 +599,14 @@ export class Router {
 
     _parseURL() {
         if (this._mode === 'hash') {
-            const hash       = window.location.hash.slice(1) || '';
-            const [path, qs] = hash.split('?');
+            const hash = window.location.hash.slice(1) || '';
+            // Strip any in-page fragment anchor BEFORE parsing the query string.
+            const withoutFragment = hash.split('#')[0];
+            const [path, qs]      = withoutFragment.split('?');
             return { path: path || '', query: _parseQuery(qs || '') };
         } else {
+            // Path mode: the browser already separates pathname, search, and
+            // hash into distinct properties — no fragment stripping needed.
             const path = window.location.pathname;
             const qs   = window.location.search.slice(1);
             return { path: path || '/', query: _parseQuery(qs) };
