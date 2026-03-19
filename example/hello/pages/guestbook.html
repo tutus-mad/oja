@@ -69,7 +69,7 @@
 </div>
 
 <script type="module">
-    import { form, each, notify, context, on } from '../../../build/oja.core.esm.js';
+    import { form, each, notify, context } from '../../../build/oja.core.esm.js';
 
     const COLORS = ['#f9a825', '#66bb6a', '#42a5f5', '#ab47bc', '#ef5350', '#26c6da'];
 
@@ -102,29 +102,29 @@
             return data;
         },
 
-        success: async (data) => {
+        success: async () => {
             const idx   = entries().length;
             const color = COLORS[idx % COLORS.length];
 
-            // Read directly from inputs — bypasses any FormData quirks
             const nameVal    = nameInput.value.trim();
             const messageVal = msgInput.value.trim();
-
-            const photo = previewImg.style.display !== 'none' && previewImg.src
+            const photo      = previewImg.style.display !== 'none' && previewImg.src
                 ? previewImg.src
                 : null;
 
-            setEntries([{
+            const entry = {
                 name    : nameVal,
                 message : messageVal,
-                initial : nameVal[0].toUpperCase(),
+                initial : nameVal[0]?.toUpperCase() ?? '?',
                 color,
                 photo,
                 avatarStyle: photo ? 'background:transparent' : `background:${color}`,
                 time    : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            }, ...entries()]);
+            };
 
+            setEntries([entry, ...entries()]);
             renderEntries();
+
             form.reset(formEl);
             previewImg.style.display = 'none';
             previewImg.src = '';

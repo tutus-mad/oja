@@ -4,23 +4,24 @@
  * The simplest Oja app that shows navigation.
  *
  * Demonstrates:
- *   Router    — hash-mode SPA navigation, two routes
+ *   Router    — hash-mode SPA navigation, three routes
  *   Out       — Out.component() as route handler
- *   context() — guestbook entries shared across the app
- *   notify    — toast on milestone
+ *   context() — guestbook entries and game progress shared across the app
  */
 
-import { Router, Out, context, notify } from '../../build/oja.core.esm.js';
+import { Router, Out, context } from '../../build/oja.core.esm.js';
 
-// ── Shared state — guestbook entries live here, survive navigation ────────────
-// Any page that calls context('entries') gets the same reactive value.
+// Shared guestbook entries — any page calling context('entries') gets this pair
 export const [entries, setEntries] = context('entries', []);
 
-// ── Router ────────────────────────────────────────────────────────────────────
+// Shared game progress — game.html reads this to restore level on navigation
+export const [gameLevel, setGameLevel] = context('gameLevel', 0);
+
 const router = new Router({ mode: 'hash', outlet: '#app' });
 
 router.Get('/',          Out.component('pages/counter.html'));
 router.Get('/guestbook', Out.component('pages/guestbook.html'));
+router.Get('/game',      Out.component('pages/game.html'));
 
 router.NotFound(Out.html(`
     <div style="text-align:center;padding:64px 0;color:#444">
