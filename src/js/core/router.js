@@ -587,9 +587,15 @@ export class Router {
     }
 
     _pushURL(path, params = {}) {
-        const url = this._buildURL(path, params);
-        if (window.location.href !== new URL(url, window.location.href).href) {
-            window.history.pushState({ path, params }, '', url);
+        try {
+            const url = this._buildURL(path, params);
+            if (window.location.href !== new URL(url, window.location.href).href) {
+                window.history.pushState({ path, params }, '', url);
+            }
+        } catch (e) {
+            if (e.name !== 'SecurityError') {
+                console.error('[oja/router] pushState failed:', e);
+            }
         }
     }
 
