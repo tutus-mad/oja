@@ -374,11 +374,13 @@ function _dismiss(toast) {
         toast._timeout = null;
     }
 
+    const container = toast.parentNode;
     toast.classList.add('oja-toast-leaving');
     toast.classList.remove('oja-toast-visible');
 
     setTimeout(() => {
-        if (toast.parentNode) toast.remove();
+        if (container && container.contains(toast)) toast.remove();
+        else if (toast.parentNode) toast.remove();
         emit('notify:dismissed', { id: toast.id });
     }, 300);
 }

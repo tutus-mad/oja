@@ -1,4 +1,3 @@
-// src/js/core/channel.js
 /**
  * oja/channel.js
  * Go-style channels for coordinating async work in JavaScript.

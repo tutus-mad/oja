@@ -1,4 +1,3 @@
-// src/js/core/component.js
 /**
  * oja/component.js
  * Loads .html files, mounts them into the DOM, and manages lifecycle

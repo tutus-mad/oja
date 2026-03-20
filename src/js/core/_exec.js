@@ -137,7 +137,6 @@ export function execScripts(container, sourceUrl, propsData = {}) {
                 console.error('[oja/_exec] module script failed in:', sourceUrl, e);
                 revoke();
             }, { once: true });
-            setTimeout(revoke, 30000);
 
         } else {
             next.textContent = old.textContent;

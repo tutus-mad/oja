@@ -12,27 +12,17 @@
  *
  *   import { Out } from '../oja/out.js';
  *
- *   // Router — declare what to show, not how
  *   router.Get('/hosts', Out.component('pages/hosts.html'));
  *   router.NotFound(Out.component('pages/404.html'));
- *
- *   // Modal — body is a full rendered component, not a string
  *   modal.open('confirm', { body: Out.component('components/confirm.html', data) });
- *
- *   // Notify — rich HTML or plain text
- *   notify.show(Out.html('<strong>Deploy complete</strong> in 2.3s'));
+ *   notify.show(Out.html('<strong>Deploy complete</strong>'));
  *   notify.show(Out.text('Saved'));
- *
- *   // Template — empty state as a component
- *   each(container, 'hosts', items, { empty: Out.component('states/no-hosts.html') });
- *
- *   // Component — error fallback as a component
- *   component.mount('#app', url, data, {}, { error: Out.component('states/error.html') });
  *
  * ─── Types ────────────────────────────────────────────────────────────────────
  *
  *   Out.component(url, data?, lists?, options?)  — fetch + render an .html file
- *   Out.html(string)                             — raw HTML string
+ *   Out.html(string)                             — raw HTML string, with script execution
+ *   Out.raw(string)                              — raw HTML string, no script execution
  *   Out.text(string)                             — plain text (auto-escaped)
  *   Out.svg(stringOrUrl, options?)               — SVG inline or fetched from URL
  *   Out.image(url, options?)                     — <img> with loading, alt, etc.
@@ -40,7 +30,32 @@
  *   Out.fn(asyncFn, options?)                    — lazy async, called at render time
  *   Out.empty()                                  — renders nothing (explicit no-op)
  *
- * ─── Shorthand aliases (for real code) ───────────────────────────────────────
+ * ─── Composition ──────────────────────────────────────────────────────────────
+ *
+ *   Out.if(condition, thenOut, elseOut?)
+ *     — condition is a function () => bool, evaluated at render time
+ *     out.if(() => user.isAdmin, Out.c('admin.html'), Out.c('denied.html'))
+ *
+ *   Out.promise(promise, { loading, success, error })
+ *     — three-state async: show loading Out while promise is pending,
+ *       success Out when it resolves (receives resolved value as data),
+ *       error Out when it rejects (receives { error: message } as data).
+ *     Out.promise(fetchUser(id), {
+ *         loading: Out.c('states/loading.html'),
+ *         success: (user) => Out.c('pages/user.html', user),
+ *         error:   Out.c('states/error.html'),
+ *     })
+ *
+ *   Out.list(items, itemFn, options?)
+ *     — render a list of items, one Out per item.
+ *     — itemFn receives (item, index) and must return an Out.
+ *     — options.empty: Out — shown when items is empty (default: Out.empty())
+ *     Out.list(users, (user) => Out.c('components/user.html', user))
+ *     Out.list(users, (user) => Out.c('components/user.html', user), {
+ *         empty: Out.c('states/no-users.html'),
+ *     })
+ *
+ * ─── Shorthand aliases ────────────────────────────────────────────────────────
  *
  *   Out.c()  — Out.component()
  *   Out.h()  — Out.html()
@@ -53,6 +68,14 @@
  *   out.clone(overrides?)             — returns new Out with merged options
  *   out.prefetch(options?)            — optional preload/prepare logic
  *   out.getText()                     — plain text representation (accessibility)
+ *
+ * ─── VFS integration ─────────────────────────────────────────────────────────
+ *
+ *   // Register once in app.js — all Out.component() calls check VFS first
+ *   Out.vfsUse(vfs);
+ *
+ *   // Read back the registered instance
+ *   Out.vfsGet();
  */
 
 import { render as templateRender, fill, each } from './template.js';
@@ -60,9 +83,14 @@ import { execScripts }                           from './_exec.js';
 import { emit }                                  from './events.js';
 
 const _cache    = new Map();
-const CACHE_TTL = 60000;
+const CACHE_TTL = 60_000;
 const CACHE_MAX = 50;
 
+// VFS instance registered via Out.vfsUse() — checked before every network fetch.
+let _vfs = null;
+
+// Fetch an HTML file, checking the in-memory cache and VFS before hitting the network.
+// On a successful network fetch the result is written back to VFS for offline use.
 async function _fetchHTML(url, options = {}) {
     const now    = Date.now();
     const cached = _cache.get(url);
@@ -74,9 +102,20 @@ async function _fetchHTML(url, options = {}) {
         return cached.html;
     }
 
-    if (options.signal?.aborted) {
-        throw new Error('[oja/out] fetch aborted');
+    if (_vfs) {
+        try {
+            const text = await _vfs.readText(url);
+            if (text !== null) {
+                _cache.set(url, { html: text, timestamp: now, size: text.length });
+                emit('out:vfs-hit', { url });
+                return text;
+            }
+        } catch {
+            // VFS miss — fall through to network
+        }
     }
+
+    if (options.signal?.aborted) throw new Error('[oja/out] fetch aborted');
 
     emit('out:fetch-start', { url });
     const start = performance.now();
@@ -89,15 +128,13 @@ async function _fetchHTML(url, options = {}) {
         const size = new Blob([html]).size;
 
         while (_cache.size >= CACHE_MAX) {
-            const oldestKey = _cache.keys().next().value;
-            _cache.delete(oldestKey);
+            _cache.delete(_cache.keys().next().value);
         }
-
         _cache.set(url, { html, timestamp: now, size });
 
-        const ms = performance.now() - start;
-        emit('out:fetch-end', { url, ms, size });
+        if (_vfs) _vfs.write(url, html);
 
+        emit('out:fetch-end', { url, ms: performance.now() - start, size });
         return html;
     } catch (e) {
         emit('out:fetch-error', { url, error: e.message });
@@ -132,17 +169,16 @@ function _emergencyError(container, message) {
             String(message).replace(/</g, '&lt;')
         }</pre>
         </div>`;
-    } catch {
-        // Ignore
-    }
+    } catch { /* ignore */ }
 }
+
+// ─── Base class ───────────────────────────────────────────────────────────────
 
 class _Out {
     constructor(type, payload, options = {}) {
         this.type     = type;
         this._payload = payload;
         this._options = options;
-        this._id      = `out-${Math.random().toString(36).slice(2)}`;
     }
 
     async render(container, context = {}) {
@@ -154,11 +190,7 @@ class _Out {
     }
 
     clone(overrides = {}) {
-        return new this.constructor(
-            this.type,
-            this._payload,
-            { ...this._options, ...overrides }
-        );
+        return new this.constructor(this.type, this._payload, { ...this._options, ...overrides });
     }
 
     getText() {
@@ -170,6 +202,8 @@ class _Out {
     }
 }
 
+// ─── Primitive types ──────────────────────────────────────────────────────────
+
 class _HtmlOut extends _Out {
     constructor(html, options = {}) {
         super('html', html, options);
@@ -178,6 +212,23 @@ class _HtmlOut extends _Out {
     async render(container) {
         container.innerHTML = this._payload;
         execScripts(container, null, {});
+    }
+
+    getText() {
+        const div = document.createElement('div');
+        div.innerHTML = this._payload;
+        return div.textContent || div.innerText || '';
+    }
+}
+
+class _RawOut extends _Out {
+    constructor(html, options = {}) {
+        super('raw', html, options);
+    }
+
+    // Insert HTML without executing any inline scripts.
+    async render(container) {
+        container.innerHTML = this._payload;
     }
 
     getText() {
@@ -225,9 +276,7 @@ class _SvgOut extends _Out {
             try {
                 await fetch(this._payload, { method: 'HEAD', signal: options.signal });
             } catch (e) {
-                if (e.name !== 'AbortError') {
-                    console.warn('[oja/out] SVG prefetch failed:', e);
-                }
+                if (e.name !== 'AbortError') console.warn('[oja/out] SVG prefetch failed:', e);
             }
         }
         return this;
@@ -263,18 +312,14 @@ class _ImageOut extends _Out {
     }
 
     async prefetch(options = {}) {
-        if (!options.bypassCache) {
-            const img = new Image();
-            img.src = this._payload;
-            return new Promise((resolve, reject) => {
-                img.onload  = resolve;
-                img.onerror = reject;
-                if (options.signal) {
-                    options.signal.addEventListener('abort', () => { img.src = ''; reject(new Error('Aborted')); });
-                }
-            });
-        }
-        return this;
+        if (options.bypassCache) return this;
+        const img = new Image();
+        img.src = this._payload;
+        return new Promise((resolve, reject) => {
+            img.onload  = resolve;
+            img.onerror = reject;
+            options.signal?.addEventListener('abort', () => { img.src = ''; reject(new Error('Aborted')); });
+        });
     }
 }
 
@@ -312,17 +357,14 @@ class _ComponentOut extends _Out {
     async render(container, context = {}) {
         const mergedData = { ...context, ...this._data };
         const start      = performance.now();
-
-        const loadingEl = container.querySelector('[data-loading]');
-        const errorEl   = container.querySelector('[data-error]');
+        const loadingEl  = container.querySelector('[data-loading]');
+        const errorEl    = container.querySelector('[data-error]');
 
         if (loadingEl) loadingEl.style.display = '';
         if (errorEl)   errorEl.style.display   = 'none';
 
         try {
-            const html = await _fetchHTML(this._payload, {
-                bypassCache: this._options.bypassCache
-            });
+            const html = await _fetchHTML(this._payload, { bypassCache: this._options.bypassCache });
 
             container.innerHTML = templateRender(html, mergedData);
             fill(container, mergedData);
@@ -342,11 +384,10 @@ class _ComponentOut extends _Out {
                 component._activeElement = oldActive;
             }
 
-            const ms = performance.now() - start;
             emit('out:component-rendered', {
                 url: this._payload,
-                ms,
-                hasData: Object.keys(mergedData).length
+                ms: performance.now() - start,
+                hasData: Object.keys(mergedData).length,
             });
 
         } catch (e) {
@@ -356,7 +397,7 @@ class _ComponentOut extends _Out {
                 errorEl.style.display = '';
                 if (loadingEl) loadingEl.style.display = 'none';
             } else if (this._options.error) {
-                const isNetworkError = e instanceof TypeError;
+                const isNetworkError   = e instanceof TypeError;
                 const errorIsComponent = this._options.error.type === 'component';
 
                 if (isNetworkError && errorIsComponent) {
@@ -386,36 +427,21 @@ class _ComponentOut extends _Out {
     async prefetch(options = {}) {
         if (this._prefetched) return this;
         try {
-            await _fetchHTML(this._payload, {
-                signal:      options.signal,
-                bypassCache: options.bypassCache
-            });
+            await _fetchHTML(this._payload, { signal: options.signal, bypassCache: options.bypassCache });
             this._prefetched = true;
             emit('out:component-prefetched', { url: this._payload });
         } catch (e) {
-            if (e.name !== 'AbortError') {
-                console.warn(`[oja/out] prefetch failed: ${this._payload}`, e);
-            }
+            if (e.name !== 'AbortError') console.warn(`[oja/out] prefetch failed: ${this._payload}`, e);
         }
         return this;
     }
 
     withData(data) {
-        return new _ComponentOut(
-            this._payload,
-            _deepMerge(this._data, data),
-            this._lists,
-            this._options
-        );
+        return new _ComponentOut(this._payload, _deepMerge(this._data, data), this._lists, this._options);
     }
 
     withLists(lists) {
-        return new _ComponentOut(
-            this._payload,
-            this._data,
-            { ...this._lists, ...lists },
-            this._options
-        );
+        return new _ComponentOut(this._payload, this._data, { ...this._lists, ...lists }, this._options);
     }
 }
 
@@ -439,7 +465,6 @@ class _FnOut extends _Out {
                 try {
                     await this._options.error.render(container, { error: e.message });
                 } catch (e2) {
-                    console.error('[oja/out] error Out also threw — using emergency fallback:', e2);
                     _emergencyError(container, e.message);
                 }
             } else {
@@ -451,26 +476,110 @@ class _FnOut extends _Out {
     }
 
     async prefetch(options = {}) {
-        if (this._payload.prefetch) {
-            await this._payload.prefetch(options);
-        }
+        if (this._payload.prefetch) await this._payload.prefetch(options);
         return this;
     }
 }
 
 class _EmptyOut extends _Out {
-    constructor() {
-        super('empty', null);
+    constructor() { super('empty', null); }
+    async render(container) { container.innerHTML = ''; }
+    getText() { return ''; }
+}
+
+// ─── Composition types ────────────────────────────────────────────────────────
+
+class _IfOut extends _Out {
+    constructor(conditionFn, thenOut, elseOut, options = {}) {
+        super('if', conditionFn, options);
+        this._then = thenOut;
+        this._else = elseOut || new _EmptyOut();
     }
 
-    async render(container) {
-        container.innerHTML = '';
+    // Evaluate condition at render time — not reactive, stateless.
+    async render(container, context = {}) {
+        const branch = this._payload(context) ? this._then : this._else;
+        await branch.render(container, context);
     }
 
-    getText() {
-        return '';
+    async prefetch(options = {}) {
+        await Promise.allSettled([
+            this._then.prefetch(options),
+            this._else.prefetch(options),
+        ]);
+        return this;
     }
 }
+
+class _PromiseOut extends _Out {
+    constructor(promise, states, options = {}) {
+        super('promise', promise, options);
+        this._loading = states.loading || new _EmptyOut();
+        this._success = states.success;
+        this._error   = states.error   || new _EmptyOut();
+    }
+
+    async render(container, context = {}) {
+        await this._loading.render(container, context);
+
+        try {
+            const value = await this._payload;
+
+            // success can be an Out directly, or a function that receives the resolved value
+            const successOut = typeof this._success === 'function'
+                ? this._success(value)
+                : this._success;
+
+            if (!successOut) {
+                container.innerHTML = '';
+                return;
+            }
+            await successOut.render(container, { ...context, ...( typeof value === 'object' && value !== null ? value : { value }) });
+        } catch (e) {
+            const errorOut = typeof this._error === 'function'
+                ? this._error(e)
+                : this._error;
+
+            await errorOut.render(container, { ...context, error: e.message });
+        }
+    }
+}
+
+class _ListOut extends _Out {
+    constructor(items, itemFn, options = {}) {
+        super('list', items, options);
+        this._itemFn = itemFn;
+        // options.empty — Out to show when items is empty (defaults to Out.empty())
+        this._emptyOut = options.empty || new _EmptyOut();
+    }
+
+    async render(container, context = {}) {
+        const items = typeof this._payload === 'function'
+            ? this._payload()
+            : this._payload;
+
+        if (!items || items.length === 0) {
+            await this._emptyOut.render(container, context);
+            return;
+        }
+
+        container.innerHTML = '';
+
+        await Promise.all(items.map(async (item, index) => {
+            const slot = document.createElement('div');
+            slot.dataset.listIndex = index;
+            container.appendChild(slot);
+
+            const itemOut = this._itemFn(item, index);
+            if (!_Out.is(itemOut)) {
+                throw new Error(`[oja/out] Out.list() itemFn must return an Out (got ${typeof itemOut} at index ${index})`);
+            }
+            await itemOut.render(slot, { ...context, item, index });
+        }));
+    }
+}
+
+// ─── Out public API ───────────────────────────────────────────────────────────
 
 export const Out = {
     component(url, data = {}, lists = {}, options = {}) {
@@ -479,6 +588,11 @@ export const Out = {
 
     html(htmlString) {
         return new _HtmlOut(htmlString);
+    },
+
+    // Insert HTML without executing inline scripts — safer for untrusted content.
+    raw(htmlString) {
+        return new _RawOut(htmlString);
     },
 
     text(string) {
@@ -505,6 +619,33 @@ export const Out = {
         return new _EmptyOut();
     },
 
+    // Conditional rendering — condition is evaluated at render time, not eagerly.
+    // condition: () => boolean  thenOut: Out  elseOut?: Out
+    if(conditionFn, thenOut, elseOut) {
+        if (typeof conditionFn !== 'function') {
+            throw new Error('[oja/out] Out.if() condition must be a function () => boolean');
+        }
+        return new _IfOut(conditionFn, thenOut, elseOut);
+    },
+
+    // Three-state async rendering — loading while pending, success/error on settle.
+    // promise: Promise  states: { loading?: Out, success: Out | (value) => Out, error?: Out | (err) => Out }
+    promise(promise, states = {}) {
+        if (!states.success) {
+            throw new Error('[oja/out] Out.promise() requires states.success');
+        }
+        return new _PromiseOut(promise, states);
+    },
+
+    // Render a list of items — one Out slot per item.
+    // items: Array  itemFn: (item, index) => Out  options?: { empty?: Out }
+    list(items, itemFn, options = {}) {
+        if (typeof itemFn !== 'function') {
+            throw new Error('[oja/out] Out.list() requires an itemFn: (item, index) => Out');
+        }
+        return new _ListOut(items, itemFn, options);
+    },
+
     is(value) {
         return value instanceof _Out;
     },
@@ -518,11 +659,8 @@ export const Out = {
     },
 
     clearCache(url) {
-        if (url) {
-            _cache.delete(url);
-        } else {
-            _cache.clear();
-        }
+        if (url) _cache.delete(url);
+        else     _cache.clear();
         return this;
     },
 
@@ -532,13 +670,24 @@ export const Out = {
             entries.push({ url, age: Date.now() - entry.timestamp, size: entry.size });
         }
         return { size: _cache.size, maxSize: CACHE_MAX, ttl: CACHE_TTL, entries };
-    }
+    },
+
+    // Register a VFS instance — all Out.component() calls check it before the network.
+    // On a network fetch the result is written back to VFS for future offline use.
+    vfsUse(vfs) {
+        _vfs = vfs;
+        return this;
+    },
+
+    // Returns the currently registered VFS instance, or null if none registered.
+    vfsGet() {
+        return _vfs;
+    },
 };
 
 Out.c = Out.component;
 Out.h = Out.html;
 Out.t = Out.text;
 
+// Backwards-compatible alias — Out is the canonical name.
 export const Responder = Out;
-
-export { _Out as OutBase };
