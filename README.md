@@ -12,7 +12,7 @@
   <img src="assets/oja_name.png" width="70" alt="Agbero Logo">
 </p>
 
-> *Oja* (Yoruba: *marketplace*) — a minimal, zero-build JavaScript framework for building multi-app SPAs.
+> *Oja* (Yoruba: *marketplace*) — a minimal, zero-build JavaScript framework for building multi-page SPAs.
 
 
 
@@ -51,7 +51,7 @@ A component is a plain `.html` file a UI developer can open in a browser, edit, 
 
 ## Installation
 
-No package manager required. Two ways to use Oja:
+No package manager required. Three ways to use Oja:
 
 ---
 
@@ -80,11 +80,11 @@ Pin to a specific version in production:
 </script>
 ```
 
-For extensions (WebSocket, Worker, WASM, Canvas, etc.) use the full build:
+For extensions (WebSocket, Worker, WASM, Canvas, drag-and-drop, etc.) use the full build:
 
 ```html
 <script type="module">
-    import { OjaSocket, OjaWorker, Channel } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.full.esm.js';
+    import { OjaSocket, OjaWorker, dragdrop, Channel } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.full.esm.js';
 </script>
 ```
 
@@ -147,8 +147,42 @@ my-project/
 // app.js — import from the barrel
 import { Router, Out, auth, notify, component } from '../oja/src/oja.js';
 
-// Extensions (SSE, WebSocket, Worker, WASM, etc.)
-import { OjaSSE, OjaWorker, Channel } from '../oja/src/oja.full.js';
+// Extensions (SSE, WebSocket, Worker, WASM, drag-and-drop, etc.)
+import { OjaSSE, OjaWorker, dragdrop } from '../oja/src/oja.full.js';
+```
+
+---
+
+## Grouped imports
+
+When you want a clean namespace without listing every name, import a group object:
+
+```js
+import { Reactive, Event, DOM } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
+
+// Reactivity
+const [count, setCount] = Reactive.state(0);
+Reactive.effect(() => console.log(count()));
+
+// Events
+Event.on('.btn', 'click', handler);
+Event.emit('app:ready');
+Event.debounce(search, 200);
+
+// DOM helpers
+const el = DOM.find('#app');
+DOM.createEl('div', { class: 'card' });
+```
+
+Or import everything under the `Oja` namespace:
+
+```js
+import { Oja } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
+
+Oja.state(0)
+Oja.Router
+Oja.notify.success('Done')
+Oja.Event.on('.btn', 'click', handler)
 ```
 
 ---
@@ -162,20 +196,17 @@ import { OjaSSE, OjaWorker, Channel } from '../oja/src/oja.full.js';
 ```js
 import { Out } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
 
-// Render a plain HTML string
-Out.html('<div class="error">Something went wrong</div>')
-
 // Render a component file with data
 Out.component('pages/dashboard.html', { user, metrics })
 
-// Render from a function — useful when data isn't known at route definition
-Out.fn(async (container, ctx) => {
-    const host = await api.get(`/api/hosts/${ctx.params.id}`);
-    return Out.component('pages/host-detail.html', host);
-})
+// Raw HTML — no script execution (safe for user-generated content)
+Out.raw('<p>User content</p>')
+
+// HTML with script execution
+Out.html('<div class="card"><script type="module">...</script></div>')
 
 // Text — safely escaped
-Out.t('Hello, world')
+Out.text('Hello, world')
 
 // Shorthands
 Out.c('components/card.html', data)  // Out.component()
@@ -183,43 +214,35 @@ Out.h('<p>content</p>')              // Out.html()
 Out.t('plain text')                  // Out.text()
 ```
 
-`Out` is accepted wherever Oja produces visible output:
+#### Composition — conditional, list, async
 
 ```js
-// Router — page rendering
-router.Get('/login', Out.component('pages/login.html'));
-router.NotFound(Out.html('<div class="error-page">404</div>'));
+// Conditional rendering — condition evaluated at render time
+Out.if(() => user.isAdmin, Out.c('admin.html'), Out.c('denied.html'))
 
-// Router — error boundary
-router.Use(Router.middleware.errorBoundary(
-    Out.component('components/error.html')
-));
+// List rendering — one Out per item
+Out.list(users, (user) => Out.c('components/user.html', user))
 
-// Component — loading state
-const router = new Router({ loading: Out.html('<div class="spinner"></div>') });
+// With custom empty state
+Out.list(users, (user) => Out.c('components/user.html', user), {
+    empty: Out.c('states/no-users.html'),
+})
 
-// Component — error fallback on mount failure
-await component.mount('#slot', 'pages/settings.html', data, {
-    error: Out.component('components/error-state.html', { message: 'Failed to load' })
-});
+// Async — loading → success → error states
+Out.promise(fetchUser(id), {
+    loading: Out.c('states/loading.html'),
+    success: (user) => Out.c('pages/user.html', user),
+    error:   Out.c('states/error.html'),
+})
 
-// Modal — body and footer
-modal.open('infoModal', {
-    body:   Out.component('components/user-detail.html', user),
-    footer: Out.html('<button data-action="modal-close">Done</button>'),
-});
-
-// Notify — rich banner content
-notify.banner(Out.html('<span>⚠️ Outage: <a href="#/status">details</a></span>'), { type: 'warn' });
-
-// Form — error display
-form.showError('#myForm', 'email', Out.html('Invalid — <a href="/help">why?</a>'));
-
-// Template each() — empty state
-each(listEl, 'hosts', hosts, {
-    empty: Out.component('components/empty-state.html', { icon: '🔍', title: 'No hosts' }),
-});
+// Lazy async — called at render time
+Out.fn(async (container, ctx) => {
+    const host = await api.get(`/hosts/${ctx.params.id}`);
+    return Out.c('pages/host-detail.html', host);
+})
 ```
+
+`Out` is accepted wherever Oja produces visible output: router, modal, notify, component, template `each()`.
 
 ### 2. Components are plain HTML files
 
@@ -303,11 +326,6 @@ router.Use(async (ctx, next) => {
     await next();
     console.log(`${ctx.path} — ${Date.now() - t}ms`);
 });
-
-// Error boundary
-router.Use(Router.middleware.errorBoundary(
-    Out.html('<div class="error-page">Something went wrong</div>')
-));
 
 // Public route
 router.Get('/login', Out.component('pages/login.html'));
@@ -450,14 +468,6 @@ Oja supports two styles — mix freely:
 | `default` | `{{val \| default "n/a"}}` | `n/a` |
 | `trunc` | `{{text \| trunc 50}}` | `Long text…` |
 
-Register custom filters:
-
-```js
-import { template } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
-
-template.filter('slug', s => s.toLowerCase().replace(/\s+/g, '-'));
-```
-
 ---
 
 ## API reference
@@ -468,18 +478,19 @@ template.filter('slug', s => s.toLowerCase().replace(/\s+/g, '-'));
 import { Store } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
 
 const store  = new Store('myapp');                        // session storage
-const secure = new Store('myapp', { encrypt: true });     // encrypted
+const secure = new Store('myapp', { encrypt: true });     // AES-GCM encrypted
 const local  = new Store('myapp', { prefer: 'local' });  // local storage
 
+// Sync API (plain store)
 store.set('page', 'hosts');
 store.get('page', 'dashboard');   // with fallback
 store.has('page');
 store.clear('page');
 store.all();
 
-// Async (encrypted)
-await secure.setAsync('token', jwt);
-await secure.getAsync('token');
+// Async API — used automatically when encrypt:true
+await secure.set('token', jwt);
+await secure.get('token');
 
 // Watch for changes
 store.onChange('theme', (newVal, oldVal) => applyTheme(newVal));
@@ -487,10 +498,170 @@ store.onChange('theme', (newVal, oldVal) => applyTheme(newVal));
 
 Storage cascade: `sessionStorage → localStorage → memory`. Same code works on web, mobile webview, and private browsing.
 
+### encrypt — standalone Web Crypto
+
+```js
+import { encrypt } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
+
+// Encrypt / decrypt
+const ct = await encrypt.seal('my secret', 'passphrase', 'salt');
+const pt = await encrypt.open(ct, 'passphrase', 'salt');
+
+// Sign / verify (HMAC-SHA256)
+const sig = await encrypt.sign('message', 'secret');
+const ok  = await encrypt.verify('message', sig, 'secret');
+
+// Rotate key without exposing plaintext
+const newCt = await encrypt.rotate(oldCt, 'old-pass', 'new-pass', 'salt');
+
+// Check availability
+if (encrypt.available()) { ... }
+```
+
+`encrypt` is separate from `Store` — import it anywhere: VFS, auth, your own modules.
+
+### VFS — offline-first virtual filesystem
+
+VFS stores your app's files in IndexedDB, backed by a background Worker. Components load from VFS first, network second. Works offline after the first visit.
+
+```js
+import { VFS, Out, Router } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
+
+const vfs = new VFS('my-app');
+await vfs.ready();
+
+// Mount remote files into local IndexedDB
+await vfs.mount('https://cdn.example.com/my-app/');
+
+// Wire to router — all Out.component() calls check VFS first
+const router = new Router({ outlet: '#app', vfs });
+router.Get('/', Out.c('pages/home.html'));
+router.start('/');
+```
+
+**Read / write:**
+```js
+vfs.write('pages/home.html', html);   // fire and forget
+await vfs.flush();                     // guarantee durability
+const html = await vfs.readText('pages/home.html');
+const bin  = await vfs.read('logo.png');  // ArrayBuffer for binary
+await vfs.rm('old.html');
+const files = await vfs.ls('/');      // flat list
+const tree  = await vfs.tree('/');    // nested tree
+```
+
+**Per-route VFS (multiple VFS instances):**
+```js
+// vfs.component() pins this VFS instance to the Out — no global side effect
+router.Get('/', vfs.component('pages/home.html', { user }));
+router.Get('/admin', adminVfs.component('pages/admin.html'));
+```
+
+**Change watchers:**
+```js
+const off = vfs.onChange('pages/', (path, content) => reloadPreview(path));
+vfs.on('conflict', ({ path }) => showConflictBadge(path));
+vfs.on('mounted',  ({ base, fetched }) => console.log('ready:', fetched.length, 'files'));
+off(); // unsubscribe
+```
+
+**Conflict policy:**
+```js
+const vfs = new VFS('my-app', {
+    onConflict: 'keep-local',                    // default — never lose local changes
+    // onConflict: 'take-remote',                // always accept remote version
+    // onConflict: (path, local, remote) => {    // decide per file
+    //     return path.startsWith('data/') ? 'remote' : 'local';
+    // },
+});
+```
+
+**VFS manifest (`vfs.json`)** — place at your remote root:
+```json
+{
+  "files": [
+    "index.html",
+    "app.js",
+    "pages/home.html",
+    "components/card.html"
+  ]
+}
+```
+
+### config — optional project configuration
+
+`oja.config.json` is the optional single source of truth for an Oja project — like `package.json` is to Node. Everything works without it.
+
+```json
+{
+  "version": "1.0.0",
+  "name": "my-app",
+
+  "vfs": {
+    "manifest": "vfs.json",
+    "conflict": "keep-local",
+    "sync": { "auto": true, "interval": 60000 }
+  },
+
+  "routes": {
+    "protected": ["/admin", "/settings"],
+    "fallback":  "/index.html"
+  },
+
+  "auth": {
+    "loginPath":   "/login",
+    "defaultPath": "/dashboard"
+  }
+}
+```
+
+```js
+import { config, VFS, Router } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
+
+// Load once in app.js
+await config.load();                  // looks for ./oja.config.json
+await config.load('https://cdn.example.com/my-app/');  // or remote base
+
+// Read any section
+const vfsCfg = config.get('vfs');    // → object or null
+
+// Apply to VFS — mounts, wires sync interval, sets conflict policy
+const vfs = new VFS('my-app');
+await vfs.ready();
+await config.applyVFS(vfs, 'https://cdn.example.com/my-app/');
+
+// Apply to Router — registers protected route middleware
+const router = new Router({ outlet: '#app', vfs });
+config.applyRouter(router, { auth });
+router.start('/');
+```
+
+A complete `app.js` with config:
+```js
+import { config, VFS, Router, Out, auth } from './oja.core.esm.js';
+
+await config.load();
+
+const vfs    = new VFS('my-app');
+const router = new Router({ outlet: '#app', vfs });
+
+await vfs.ready();
+await config.applyVFS(vfs, './');
+config.applyRouter(router, { auth });
+
+router.Get('/login',     Out.c('pages/login.html'));
+router.Get('/dashboard', Out.c('pages/dashboard.html'));
+
+router.start('/');
+```
+
 ### Events — delegated, cross-component
 
 ```js
-import { on, once, off, emit, listen, debounce, throttle } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
+import { on, once, off, emit, listen, debounce, throttle, keys } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
+
+// Or via the Event group:
+import { Event } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
 
 on('.btn-delete', 'click', (e, el) => deleteItem(el.dataset.id));
 once('#confirm-ok', 'click', handleConfirm);
@@ -504,9 +675,47 @@ unsub(); // stop listening
 on('#search', 'input', debounce(search, 200));
 on('#scroll', 'scroll', throttle(updateNav, 100));
 
-// Visibility
+// Keyboard shortcuts
+keys({
+    'ctrl+s': () => save(),
+    'escape': () => modal.closeAll(),
+    '/':      () => document.getElementById('search')?.focus(),
+});
+
+// Visibility and resize
 onVisible('#lazy-section', () => loadContent());
 onResize('#chart', ({ width, height }) => redraw(width, height));
+```
+
+### Drag and drop
+
+```js
+import { dragdrop } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.full.esm.js';
+
+// Reorderable list
+dragdrop.reorder('#host-list', {
+    onReorder: (items) => api.post('/hosts/reorder', { order: items.map(el => el.dataset.id) }),
+    handle:    '.drag-handle',
+    animation: 150,
+});
+
+// File drop zone
+dragdrop.dropZone('#upload-area', {
+    onDrop:    (files) => files.forEach(uploadFile),
+    accept:    ['.jpg', '.png', '.pdf'],
+    maxSize:   10 * 1024 * 1024,
+    onError:   (msg) => notify.error(msg),
+});
+
+// Custom drag source + drop target
+dragdrop.draggable('.host-card', {
+    data: (el) => ({ id: el.dataset.id }),
+});
+
+dragdrop.dropTarget('.folder', {
+    accept: (el, data) => data.type === 'host',
+    onDrop: (el, data) => moveHostToFolder(data.id, el.dataset.folderId),
+});
 ```
 
 ### Forms
@@ -515,26 +724,23 @@ onResize('#chart', ({ width, height }) => redraw(width, height));
 import { form } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
 
 form.on('#loginForm', {
-    submit: async (data) => api.post('/login', data),
+    submit:  async (data) => api.post('/login', data),
     success: (res) => auth.session.start(res.token),
-    error: (err) => form.showError('#loginForm', 'password', err.message),
+    error:   (err) => form.showError('#loginForm', 'password', err.message),
 });
 
-// showError also accepts Out for rich content
-form.showError('#myForm', 'email',
-    Out.html('Invalid format — <a href="/help">see examples</a>')
-);
+// Rich error — accepts Out
+form.showError('#myForm', 'email', Out.html('Invalid — <a href="/help">see examples</a>'));
 
-// Validation
+// Async validation
 const ok = await form.validate('#firewallForm', {
     ip:     (v) => /^[\d.:/a-fA-F]+$/.test(v) || 'Enter a valid IP or CIDR',
     reason: (v) => v.trim().length >= 3 || 'Too short',
-    // Async rules supported
-    ip: async (v) => await api.get(`/check?ip=${v}`) || 'Already blocked',
+    ip:     async (v) => await api.get(`/check?ip=${v}`) || 'Already blocked',
 });
 if (!ok) return;
 
-// Image upload + preview — one line
+// Image upload + preview
 form.image('#avatarInput', '#avatarPreview', {
     maxSizeMb : 2,
     accept    : ['image/jpeg', 'image/png'],
@@ -578,36 +784,11 @@ modal.open('infoModal', {
 
 // Cascading drawers
 modal.push('routeDrawer', { host: 'api.example.com' });
-modal.push('backendDrawer', { backend: backendData });
-modal.pop();  // closes backendDrawer
-modal.pop();  // closes routeDrawer
+modal.pop();
 
 // Promise-based confirm
 const confirmed = await modal.confirm('Delete this rule?');
 if (confirmed) await api.delete(`/api/firewall?ip=${ip}`);
-```
-
-### UI helpers — loading states
-
-```html
-<!-- Zero JS — just add data-loading -->
-<button data-action="save"  data-loading="Saving...">Save</button>
-<a href="#/hosts" data-page="/hosts" data-loading="Loading">Hosts</a>
-```
-
-```js
-import { ui } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
-
-on('#deploy-btn', 'click', async (e, el) => {
-    const btn = ui(el);
-    btn.loading('Deploying...');
-    try {
-        await api.post('/deploy');
-        btn.done('Deployed ✓');
-    } catch {
-        btn.error('Failed — retry?');
-    }
-});
 ```
 
 ### Real-time — SSE and WebSocket
@@ -615,15 +796,14 @@ on('#deploy-btn', 'click', async (e, el) => {
 ```js
 import { OjaSSE, OjaSocket } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.full.esm.js';
 
-// Server-Sent Events — server pushes to client
+// Server-Sent Events
 const sse = new OjaSSE('/api/events');
 sse.on('metrics', (data) => setMetrics(data));
-sse.on('log',     (data) => appendLog(data));
 sse.onDisconnect(() => notify.banner('Connection lost', { type: 'warn' }));
 sse.onConnect(()    => notify.dismissBanner());
 component.onUnmount(() => sse.close());
 
-// WebSocket — bidirectional
+// WebSocket
 const ws = new OjaSocket('wss://api.example.com/live');
 ws.on('connect',    () => ws.send({ type: 'subscribe', channel: 'hosts' }));
 ws.on('message',    (data) => handleMessage(data));
@@ -637,52 +817,11 @@ Both reconnect automatically with exponential backoff.
 
 ## Concurrency
 
-### OjaWorker — inline Web Workers
-
-No separate file needed. The function runs in a real Worker thread.
-
-```js
-import { OjaWorker } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.full.esm.js';
-
-const worker = new OjaWorker((self) => {
-    // ⚠️  Cannot access outer scope — treat as a separate file
-    self.handle('compress', async (data) => compress(data));
-    self.handle('resize', async ({ buffer, width, height }) =>
-        resizeImageBuffer(buffer, width, height)
-    );
-});
-
-const result = await worker.call('resize', { buffer, width: 800, height: 600 });
-worker.send('logEvent', { event: 'pageview' }); // fire and forget
-component.onUnmount(() => worker.close());
-```
-
-### OjaWasm — WebAssembly
-
-```js
-import { OjaWasm } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.full.esm.js';
-
-// Runs on main thread
-const wasm = new OjaWasm('/modules/processor.wasm');
-await wasm.ready();
-const result = await wasm.call('processImage', imageBuffer);
-
-// Runs in a Worker — main thread stays free
-const generator = new OjaWasm('/modules/generator.wasm', { worker: true });
-await generator.ready();
-const image = await generator.call('generate', { prompt, width: 512, height: 512 });
-
-component.onUnmount(() => generator.close());
-```
-
-Designed for the WebAssembly Component Model — when browsers support `import { fn } from './module.wasm'` natively, `OjaWasm` switches transparently.
-
 ### Channel — Go-style coordination
 
 ```js
 import { Channel, go, pipeline, fanOut, fanIn } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.full.esm.js';
 
-// Auto-detects optimal worker pool size
 const ch = new Channel({ buffer: 10, workers: true, name: 'images' });
 
 await ch.send(imageBuffer);
@@ -697,13 +836,32 @@ go(async () => {
 // Pipeline — chain processing stages
 const output = pipeline([resize, compress, upload], inputChannel);
 
-// Fan-out — distribute work across consumers
+// Fan-out / fan-in
 const [q1, q2, q3] = fanOut(inputChannel, 3);
-
-// Fan-in — merge results from multiple producers
 const merged = fanIn([q1, q2, q3]);
 
 component.onUnmount(() => ch.close());
+```
+
+### Runner — long-lived background worker
+
+`Runner` is for infrastructure that needs to stay alive across the app lifetime — game loops, simulations, persistent connections. VFS uses it internally.
+
+```js
+import { Runner } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
+
+const worker = new Runner((self) => {
+    let count = 0;
+    self.on('increment', (data) => { count += data.by ?? 1; });
+    self.on('get',       ()     => { return { count }; });
+});
+
+worker.send('increment', { by: 5 });           // fire and forget
+await worker.post('increment', { by: 1 });     // await receipt
+const { count } = await worker.request('get'); // await response
+
+worker.on('event', (data) => console.log(data));
+worker.close();
 ```
 
 ---
@@ -735,7 +893,6 @@ The boundary rule: **Would another app ever need this?** Yes → it belongs in `
 ```js
 import { logger, debug } from 'https://cdn.jsdelivr.net/npm/@agberohq/oja@latest/build/oja.core.esm.js';
 
-// Application events — works in production
 logger.info('auth', 'User logged in', { userId: 42 });
 logger.warn('api', 'Slow response', { ms: 1240, path: '/config' });
 logger.error('component', 'Load failed', { url: 'hosts.html' });
@@ -765,20 +922,21 @@ window._debug = debug; // access from browser console
 | CSS ownership | App owns all styles | Oja only owns lifecycle animation classes |
 | Auth | Declared at route | Never check `isActive()` manually |
 | Token security | Encrypted cascade | Web Crypto API, no plaintext tokens |
-| Empty/error states | `Out` primitive | One type, used consistently |
-| Worker pattern | `OjaWorker` + `Channel` separate | Single responsibility — Channel moves data, Worker runs code |
+| Encryption | `encrypt.js` standalone | `Store`, `auth`, `VFS`, and third parties all import the same module |
+| Offline | VFS optional | Progressive enhancement — start without VFS, add it when needed |
+| Config | `oja.config.json` optional | Like `package.json` — everything works without it |
+| Worker pattern | `Runner` + `Channel` separate | `Runner` stays alive; `Channel` moves data — single responsibility |
 | WASM | Component Model aligned | Same API today and when native support lands |
 | Third-party | `adapter.js` bridge | D3, GSAP, Chart.js registered once, used anywhere |
-| `Out` in template engine | Duck-type `.render()` check | Importing `Out` into `template.js` would create a circular dependency (`out.js` imports `template.js`) |
 
 ---
 
 ## Known limitations
 
-- **Nested `{{range}}` loops**: inner `Index`/`First`/`Last` are list-absolute in chunked renders — access the outer loop variable by its `data-as` name (e.g. `{{h.Index}}` not `{{Index}}`).
-- **`OjaWasm` worker mode**: JS import callbacks (functions WASM calls back into JS) are stubbed in the worker thread. For WASM modules that need JS callbacks, use non-worker mode.
+- **Nested `{{range}}` loops**: inner `Index`/`First`/`Last` are list-absolute in chunked renders — access the outer loop variable by its `data-as` name.
+- **`OjaWasm` worker mode**: JS import callbacks are stubbed in the worker thread. For WASM modules that need JS callbacks, use non-worker mode.
 - **`OjaWorker` scope isolation**: worker functions are serialised as strings and run in a separate thread — they cannot close over variables from the outer scope.
-- **`webrtc.js` `connect()`**: WebRTC signaling is application-specific. Use `createPeer()`, `createOffer()`, `setLocalDescription()` directly and wire your own signaling server.
+- **`webrtc.js` `connect()`**: WebRTC signaling is application-specific. Wire your own signaling server using `createPeer()`, `createOffer()`, `setLocalDescription()`.
 - **No DevTools browser extension yet**.
 
 ---

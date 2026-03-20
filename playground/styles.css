@@ -641,3 +641,26 @@ iframe {
         width: 240px;
     }
 }
+/* ─── Panel resize handles ───────────────────────────────────────────────── */
+
+.resize-handle {
+    flex-shrink: 0;
+    background: transparent;
+    transition: background 0.15s;
+    z-index: 10;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+    background: var(--accent, #7c6aff);
+}
+
+.resize-handle-x {
+    width: 4px;
+    cursor: col-resize;
+}
+
+.resize-handle-y {
+    height: 4px;
+    cursor: row-resize;
+}

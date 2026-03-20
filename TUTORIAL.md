@@ -57,8 +57,8 @@ my-app/
     <link rel="stylesheet" href="oja.min.css">
 </head>
 <body>
-    <div id="app"></div>
-    <script type="module" src="app.js"></script>
+<div id="app"></div>
+<script type="module" src="app.js"></script>
 </body>
 </html>
 ```
@@ -298,8 +298,8 @@ while routes change inside it.
 
 ```html
 <body>
-    <div id="app"></div>
-    <script type="module" src="app.js"></script>
+<div id="app"></div>
+<script type="module" src="app.js"></script>
 </body>
 ```
 
@@ -703,3 +703,197 @@ router.start('/');
 | `document.getElementById` inside a component | May grab an element from another component instance | Use `find('#id')` — it is scoped to the current component |
 | Declaring `router` after `auth.session.OnStart` | `ReferenceError: Cannot access 'router' before initialization` | Declare `router` before any auth session callbacks |
 | `go()` return value | `go()` returns `undefined` — it is fire-and-forget | Use a flag or a Channel to observe completion |
+
+---
+
+## Part 15 — VFS and offline-first apps
+
+VFS (Virtual File System) stores your app's HTML, JS, and CSS in IndexedDB inside the browser. Components load from IndexedDB first, then fall back to the network. After the first visit, the app works offline.
+
+VFS is entirely optional. Everything in Parts 1–14 works without it.
+
+### Basic setup
+
+```js
+import { VFS, Router, Out } from './build/oja.core.esm.js';
+
+const vfs = new VFS('my-app');
+await vfs.ready();
+
+// Mount remote files into IndexedDB on first load
+// On subsequent loads they are already there — mount() skips existing files
+await vfs.mount('https://cdn.example.com/my-app/');
+
+// Wire to router — every Out.component() call checks VFS before the network
+const router = new Router({ outlet: '#app', vfs });
+router.Get('/', Out.c('pages/home.html'));
+router.start('/');
+```
+
+### The manifest file
+
+Place a `vfs.json` at your remote root listing every file to cache:
+
+```json
+{
+  "files": [
+    "pages/home.html",
+    "pages/about.html",
+    "components/nav.html",
+    "app.js",
+    "style.css"
+  ]
+}
+```
+
+### Reading and writing files
+
+```js
+vfs.write('notes.html', html);     // fire and forget
+await vfs.flush();                  // guarantee it landed in IndexedDB
+
+const html  = await vfs.readText('notes.html');
+const bytes = await vfs.read('logo.png');  // ArrayBuffer for binary
+
+await vfs.rm('old.html');
+const files = await vfs.ls('/');           // [{ path, size, dirty, updatedAt }]
+```
+
+### Per-route VFS
+
+When you have multiple VFS instances or want explicit control without touching the global registration:
+
+```js
+// vfs.component() pins the VFS to this specific Out instance
+router.Get('/', vfs.component('pages/home.html', { user }));
+router.Get('/admin', adminVfs.component('pages/admin.html'));
+
+// Shorthand — identical to vfs.component()
+router.Get('/', vfs.c('pages/home.html'));
+```
+
+### Reacting to changes
+
+```js
+// Watch files under a prefix — fires on write, delete, or remote sync
+const off = vfs.onChange('pages/', (path, content) => {
+    console.log('page changed:', path);
+    reloadPreview();
+});
+
+// Lifecycle events
+vfs.on('mounted',  ({ base, fetched }) => console.log(fetched.length, 'files cached'));
+vfs.on('synced',   ({ updated }) => console.log(updated.length, 'files updated'));
+vfs.on('conflict', ({ path }) => showBadge(path));
+
+off(); // stop watching
+```
+
+### Conflict policy
+
+When a remote sync finds a file that has been modified locally, VFS follows the policy you set:
+
+```js
+// Default — never overwrite local changes
+const vfs = new VFS('my-app', { onConflict: 'keep-local' });
+
+// Always accept the remote version
+const vfs = new VFS('my-app', { onConflict: 'take-remote' });
+
+// Decide per file — return 'local' or 'remote'
+const vfs = new VFS('my-app', {
+    onConflict: (path, local, remote) => {
+        return path.startsWith('data/') ? 'remote' : 'local';
+    },
+});
+```
+
+---
+
+## Part 16 — oja.config.json
+
+`oja.config.json` is the optional project-level configuration file. It is the single source of truth for your Oja app — like `package.json` is to Node. Nothing requires it. When it exists, it configures VFS, routes, and auth in one place.
+
+```json
+{
+  "version": "1.0.0",
+  "name": "my-app",
+
+  "vfs": {
+    "manifest": "vfs.json",
+    "conflict": "keep-local",
+    "sync": { "auto": true, "interval": 60000 }
+  },
+
+  "routes": {
+    "protected": ["/admin", "/settings"]
+  },
+
+  "auth": {
+    "loginPath": "/login"
+  }
+}
+```
+
+Place this file at the root of your app (same directory as `index.html`).
+
+### Loading config
+
+```js
+import { config } from './build/oja.core.esm.js';
+
+// Load from the same directory as app.js
+await config.load();
+
+// Or from a remote base URL
+await config.load('https://cdn.example.com/my-app/');
+
+// Check if it was found
+if (config.loaded) {
+    console.log('app:', config.get('name'));
+}
+```
+
+`config.load()` returns `true` if found, `false` if absent (404). It never throws on a missing file — only on parse errors or unexpected server errors.
+
+### Applying config
+
+```js
+import { config, VFS, Router, auth } from './build/oja.core.esm.js';
+
+await config.load();
+
+const vfs    = new VFS('my-app');
+const router = new Router({ outlet: '#app', vfs });
+
+await vfs.ready();
+
+// Reads config.vfs — mounts remote files, wires sync interval, sets conflict policy
+await config.applyVFS(vfs, './');
+
+// Reads config.routes.protected — registers auth middleware for each protected path
+config.applyRouter(router, { auth });
+
+router.Get('/login', Out.c('pages/login.html'));
+router.start('/');
+```
+
+### Reading arbitrary sections
+
+```js
+const vfsCfg    = config.get('vfs');     // → object or null
+const appName   = config.get('name');    // → string or null
+const routesCfg = config.get('routes'); // → object or null
+const full      = config.all();          // → full object or {}
+```
+
+### No config — still works
+
+```js
+// Without oja.config.json — everything works exactly as before
+const router = new Router({ outlet: '#app' });
+router.Get('/', Out.c('pages/home.html'));
+router.start('/');
+```
+
+Config is progressive enhancement. Start without it. Add it when your app needs centralised configuration.
