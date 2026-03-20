@@ -12,6 +12,7 @@
 #   make watch      → rebuild on save (dev, core IIFE)
 #   make clean      → remove build/
 #   make check      → show output sizes
+#   make release    → tag + push current package.json version (triggers CI)
 #   make simple     → Closure Compiler SIMPLE mode (smaller)
 #   make advanced   → Closure Compiler ADVANCED mode (smallest)
 #   make compare    → build all and compare sizes
@@ -121,6 +122,17 @@ $(CSS_OUT): $(wildcard $(CSS_DIR)/*.css)
 	@echo "✓ $@ ($$(wc -c < $@ | $(SIZE)))"
 
 css: $(CSS_OUT)
+
+# ─── Release — tag and push from current package.json version ─────────────────
+# Reads version from package.json, creates a git tag, and pushes it.
+# The tag push triggers the CI build + npm publish workflow automatically.
+
+release:
+	@VERSION=$$(node -p "require('./package.json').version"); \
+	TAG="v$$VERSION"; \
+	echo "› Releasing $$TAG..."; \
+	git diff --quiet || (echo "ERROR: uncommitted changes — commit first" && exit 1); \
+	git tag $$TAG && git push origin $$TAG && echo "✓ Tagged and pushed $$TAG"
 
 # ─── Closure Compiler (optimal production — core only) ────────────────────────
 
@@ -241,4 +253,4 @@ clean:
 	@rm -rf $(BUILD_DIR) $(EXTERN_DIR)
 	@echo "✓ Cleaned"
 
-.PHONY: all core full css watch check clean simple advanced compare
+.PHONY: all core full css watch check clean release simple advanced compare
