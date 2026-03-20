@@ -127,12 +127,26 @@ css: $(CSS_OUT)
 # Reads version from package.json, creates a git tag, and pushes it.
 # The tag push triggers the CI build + npm publish workflow automatically.
 
+# ─── Release — bump, commit, tag, push ───────────────────────────────────────
+# Usage:
+#   make release         → bump patch (0.0.3 → 0.0.4)
+#   make release BUMP=minor  → bump minor (0.1.0)
+#   make release BUMP=major  → bump major (1.0.0)
+
+BUMP ?= patch
+
 release:
+	@git diff --quiet && git diff --cached --quiet \
+		|| (echo "ERROR: uncommitted changes — commit first" && exit 1)
+	@npm version $(BUMP) --no-git-tag-version
 	@VERSION=$$(node -p "require('./package.json').version"); \
 	TAG="v$$VERSION"; \
-	echo "› Releasing $$TAG..."; \
-	git diff --quiet || (echo "ERROR: uncommitted changes — commit first" && exit 1); \
-	git tag $$TAG && git push origin $$TAG && echo "✓ Tagged and pushed $$TAG"
+	git add package.json package-lock.json; \
+	git commit -m "chore: release $$TAG"; \
+	git tag $$TAG; \
+	git push origin main; \
+	git push origin $$TAG; \
+	echo "✓ Released $$TAG"
 
 # ─── Closure Compiler (optimal production — core only) ────────────────────────
 
