@@ -3,13 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oja · Simple Twitter</title>
-    <link rel="stylesheet" href="css/style.css">
+    <title>Oja · Twitter</title>
     <link rel="stylesheet" href="../../build/oja.min.css">
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<!-- The router and layout will mount into this element -->
-<div id="app"></div>
+<!-- Layout mounts here -->
+<div id="layout"></div>
+
+<!-- Modals -->
+<div class="modal-overlay" id="compose-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <button class="modal-close" data-action="modal-close">✕</button>
+            <h2>Compose Tweet</h2>
+        </div>
+        <div data-modal-body></div>
+    </div>
+</div>
+
 <script type="module" src="app.js"></script>
 </body>
 </html>
